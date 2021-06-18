@@ -137,6 +137,7 @@ public class EmbeddedRocksDBStateBackendTest
     private String dbPath;
     private RocksDB db = null;
     private ColumnFamilyHandle defaultCFHandle = null;
+    private RocksDBStateUploader rocksDBStateUploader = null;
     private final RocksDBResourceContainer optionsContainer = new RocksDBResourceContainer();
 
     public void prepareRocksDB() throws Exception {
@@ -210,7 +211,7 @@ public class EmbeddedRocksDBStateBackendTest
         testStreamFactory.setBlockerLatch(blocker);
         testStreamFactory.setWaiterLatch(waiter);
         testStreamFactory.setAfterNumberInvocations(10);
-
+        rocksDBStateUploader = spy(new RocksDBStateUploader(4));
         prepareRocksDB();
 
         keyedStateBackend =
@@ -223,6 +224,7 @@ public class EmbeddedRocksDBStateBackendTest
                                 defaultCFHandle,
                                 optionsContainer.getColumnOptions())
                         .setEnableIncrementalCheckpointing(enableIncrementalCheckpointing)
+                        .setRocksDBStateUploader(rocksDBStateUploader)
                         .build();
 
         testState1 =
@@ -367,6 +369,7 @@ public class EmbeddedRocksDBStateBackendTest
             keyedStateBackend.dispose();
             keyedStateBackend = null;
         }
+        verifyRocksDBStateUploaderClosed();
     }
 
     @Test
@@ -385,6 +388,7 @@ public class EmbeddedRocksDBStateBackendTest
             this.keyedStateBackend.dispose();
             this.keyedStateBackend = null;
         }
+        verifyRocksDBStateUploaderClosed();
     }
 
     @Test
@@ -412,6 +416,7 @@ public class EmbeddedRocksDBStateBackendTest
             this.keyedStateBackend.dispose();
             this.keyedStateBackend = null;
         }
+        verifyRocksDBStateUploaderClosed();
     }
 
     @Test
@@ -448,6 +453,7 @@ public class EmbeddedRocksDBStateBackendTest
             this.keyedStateBackend.dispose();
             this.keyedStateBackend = null;
         }
+        verifyRocksDBStateUploaderClosed();
     }
 
     @Test
@@ -485,6 +491,7 @@ public class EmbeddedRocksDBStateBackendTest
             this.keyedStateBackend.dispose();
             this.keyedStateBackend = null;
         }
+        verifyRocksDBStateUploaderClosed();
     }
 
     @Test
@@ -596,36 +603,6 @@ public class EmbeddedRocksDBStateBackendTest
         }
     }
 
-    @Test
-    public void testDisposeCleanRocksDBStateDataTransferThread() throws Exception {
-        setupRocksKeyedStateBackend();
-        try {
-            RunnableFuture<SnapshotResult<KeyedStateHandle>> snapshot =
-                    keyedStateBackend.snapshot(
-                            0L,
-                            0L,
-                            testStreamFactory,
-                            CheckpointOptions.forCheckpointWithDefaultLocation());
-            Thread asyncSnapshotThread = new Thread(snapshot);
-            asyncSnapshotThread.start();
-            waiter.await(); // wait for snapshot to run
-            waiter.reset();
-            runStateUpdates();
-            blocker.trigger(); // allow checkpointing to start writing
-            waiter.await(); // wait for snapshot stream writing to run
-            SnapshotResult<KeyedStateHandle> snapshotResult = snapshot.get();
-        } finally {
-            IOUtils.closeQuietly(keyedStateBackend);
-            keyedStateBackend.dispose();
-        }
-        for (Thread t : Thread.getAllStackTraces().keySet()) {
-            if (t.getName().contains("Flink-RocksDBStateDataTransfer")
-                    && t.getState() != Thread.State.TERMINATED) {
-                fail("Detected rocksDBStateDataTransfer thread leak. Thread name: " + t.getName());
-            }
-        }
-    }
-
     private void checkRemove(IncrementalRemoteKeyedStateHandle remove, SharedStateRegistry registry)
             throws Exception {
         for (StateHandleID id : remove.getSharedState().keySet()) {
@@ -669,6 +646,12 @@ public class EmbeddedRocksDBStateBackendTest
         keyedStateBackend.dispose();
         verify(spyDB, times(1)).close();
         assertEquals(true, keyedStateBackend.isDisposed());
+    }
+
+    private void verifyRocksDBStateUploaderClosed() {
+        if (enableIncrementalCheckpointing) {
+            verify(rocksDBStateUploader, times(1)).close();
+        }
     }
 
     private static class AcceptAllFilter implements IOFileFilter {

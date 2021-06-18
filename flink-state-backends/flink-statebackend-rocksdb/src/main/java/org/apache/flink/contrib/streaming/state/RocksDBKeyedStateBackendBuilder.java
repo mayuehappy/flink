@@ -120,6 +120,7 @@ public class RocksDBKeyedStateBackendBuilder<K> extends AbstractKeyedStateBacken
 
     private RocksDB injectedTestDB; // for testing
     private ColumnFamilyHandle injectedDefaultColumnFamilyHandle; // for testing
+    private RocksDBStateUploader injectRocksDBStateUploader;
 
     public RocksDBKeyedStateBackendBuilder(
             String operatorIdentifier,
@@ -235,6 +236,12 @@ public class RocksDBKeyedStateBackendBuilder<K> extends AbstractKeyedStateBacken
     RocksDBKeyedStateBackendBuilder<K> setWriteBatchSize(long writeBatchSize) {
         checkArgument(writeBatchSize >= 0, "Write batch size should be non negative.");
         this.writeBatchSize = writeBatchSize;
+        return this;
+    }
+
+    RocksDBKeyedStateBackendBuilder<K> setRocksDBStateUploader(
+            RocksDBStateUploader rocksDBStateUploader) {
+        this.injectRocksDBStateUploader = rocksDBStateUploader;
         return this;
     }
 
@@ -498,20 +505,36 @@ public class RocksDBKeyedStateBackendBuilder<K> extends AbstractKeyedStateBacken
         RocksDBSnapshotStrategyBase<K, ?> checkpointSnapshotStrategy;
         if (enableIncrementalCheckpointing) {
             checkpointSnapshotStrategy =
-                    new RocksIncrementalSnapshotStrategy<>(
-                            db,
-                            rocksDBResourceGuard,
-                            keySerializerProvider.currentSchemaSerializer(),
-                            kvStateInformation,
-                            keyGroupRange,
-                            keyGroupPrefixBytes,
-                            localRecoveryConfig,
-                            cancelStreamRegistry,
-                            instanceBasePath,
-                            backendUID,
-                            materializedSstFiles,
-                            lastCompletedCheckpointId,
-                            numberOfTransferingThreads);
+                    injectRocksDBStateUploader != null
+                            ? new RocksIncrementalSnapshotStrategy<>(
+                                    db,
+                                    rocksDBResourceGuard,
+                                    keySerializerProvider.currentSchemaSerializer(),
+                                    kvStateInformation,
+                                    keyGroupRange,
+                                    keyGroupPrefixBytes,
+                                    localRecoveryConfig,
+                                    cancelStreamRegistry,
+                                    instanceBasePath,
+                                    backendUID,
+                                    materializedSstFiles,
+                                    lastCompletedCheckpointId,
+                                    injectRocksDBStateUploader)
+                            : new RocksIncrementalSnapshotStrategy<>(
+                                    db,
+                                    rocksDBResourceGuard,
+                                    keySerializerProvider.currentSchemaSerializer(),
+                                    kvStateInformation,
+                                    keyGroupRange,
+                                    keyGroupPrefixBytes,
+                                    localRecoveryConfig,
+                                    cancelStreamRegistry,
+                                    instanceBasePath,
+                                    backendUID,
+                                    materializedSstFiles,
+                                    lastCompletedCheckpointId,
+                                    numberOfTransferingThreads);
+
         } else {
             checkpointSnapshotStrategy =
                     new RocksFullSnapshotStrategy<>(

@@ -142,6 +142,39 @@ public class RocksIncrementalSnapshotStrategy<K>
         this.localDirectoryName = backendUID.toString().replaceAll("[\\-]", "");
     }
 
+    public RocksIncrementalSnapshotStrategy(
+            @Nonnull RocksDB db,
+            @Nonnull ResourceGuard rocksDBResourceGuard,
+            @Nonnull TypeSerializer<K> keySerializer,
+            @Nonnull LinkedHashMap<String, RocksDbKvStateInfo> kvStateInformation,
+            @Nonnull KeyGroupRange keyGroupRange,
+            @Nonnegative int keyGroupPrefixBytes,
+            @Nonnull LocalRecoveryConfig localRecoveryConfig,
+            @Nonnull CloseableRegistry cancelStreamRegistry,
+            @Nonnull File instanceBasePath,
+            @Nonnull UUID backendUID,
+            @Nonnull SortedMap<Long, Set<StateHandleID>> materializedSstFiles,
+            long lastCompletedCheckpointId,
+            RocksDBStateUploader stateUploader) {
+
+        super(
+                DESCRIPTION,
+                db,
+                rocksDBResourceGuard,
+                keySerializer,
+                kvStateInformation,
+                keyGroupRange,
+                keyGroupPrefixBytes,
+                localRecoveryConfig);
+
+        this.instanceBasePath = instanceBasePath;
+        this.backendUID = backendUID;
+        this.materializedSstFiles = materializedSstFiles;
+        this.lastCompletedCheckpointId = lastCompletedCheckpointId;
+        this.stateUploader = stateUploader;
+        this.localDirectoryName = backendUID.toString().replaceAll("[\\-]", "");
+    }
+
     @Override
     public IncrementalRocksDBSnapshotResources syncPrepareResources(long checkpointId)
             throws Exception {
