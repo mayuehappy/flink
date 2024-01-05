@@ -193,9 +193,7 @@ class RocksDBHandle implements AutoCloseable {
 
         RocksDbKvStateInfo registeredStateMetaInfoEntry =
                 kvStateInformation.get(stateMetaInfo.getName());
-        if (registeredStateMetaInfoEntry != null) {
-            System.out.println("test");
-        }
+
         Preconditions.checkState(registeredStateMetaInfoEntry == null);
 
         registeredStateMetaInfoEntry =

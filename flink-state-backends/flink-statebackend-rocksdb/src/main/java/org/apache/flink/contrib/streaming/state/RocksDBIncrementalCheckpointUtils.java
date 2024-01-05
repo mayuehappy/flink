@@ -23,6 +23,7 @@ import org.apache.flink.runtime.state.KeyedStateHandle;
 import org.apache.flink.runtime.state.RegisteredStateMetaInfoBase;
 import org.apache.flink.runtime.state.metainfo.StateMetaInfoSnapshot;
 
+import org.apache.commons.math3.util.Pair;
 import org.rocksdb.Checkpoint;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ExportImportFilesMetaData;
@@ -34,11 +35,10 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /** Utils for RocksDB Incremental Checkpoint. */
@@ -183,15 +183,16 @@ public class RocksDBIncrementalCheckpointUtils {
         }
     }
 
-    public static Map<RegisteredStateMetaInfoBase, ExportImportFilesMetaData> exportColumnFamilies(
-            RocksDB db,
-            List<ColumnFamilyHandle> columnFamilyHandles,
-            List<StateMetaInfoSnapshot> stateMetaInfoSnapshots,
-            Path exportBasePath)
-            throws RocksDBException {
+    public static List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>>
+            exportColumnFamilies(
+                    RocksDB db,
+                    List<ColumnFamilyHandle> columnFamilyHandles,
+                    List<StateMetaInfoSnapshot> stateMetaInfoSnapshots,
+                    Path exportBasePath)
+                    throws RocksDBException {
 
-        HashMap<RegisteredStateMetaInfoBase, ExportImportFilesMetaData> cfMetaInfoAndData =
-                new HashMap<>();
+        List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>> exportResults =
+                new ArrayList<>();
         try (final Checkpoint checkpoint = Checkpoint.create(db)) {
             for (int i = 0; i < columnFamilyHandles.size(); i++) {
                 StateMetaInfoSnapshot metaInfoSnapshot = stateMetaInfoSnapshots.get(i);
@@ -203,11 +204,10 @@ public class RocksDBIncrementalCheckpointUtils {
                         checkpoint.exportColumnFamily(
                                 columnFamilyHandles.get(i),
                                 exportBasePath.resolve(UUID.randomUUID().toString()).toString());
-                cfMetaInfoAndData.put(stateMetaInfo, cfMetaData);
+                exportResults.add(new Pair<>(stateMetaInfo, cfMetaData));
             }
         }
-
-        return cfMetaInfoAndData;
+        return exportResults;
     }
 
     /** check whether the bytes is before prefixBytes in the character order. */
