@@ -22,6 +22,7 @@ import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyedStateHandle;
 import org.apache.flink.runtime.state.RegisteredStateMetaInfoBase;
 import org.apache.flink.runtime.state.metainfo.StateMetaInfoSnapshot;
+import org.apache.flink.util.Preconditions;
 
 import org.apache.commons.math3.util.Pair;
 import org.rocksdb.Checkpoint;
@@ -34,6 +35,7 @@ import javax.annotation.Nonnegative;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -189,7 +191,11 @@ public class RocksDBIncrementalCheckpointUtils {
                     List<ColumnFamilyHandle> columnFamilyHandles,
                     List<StateMetaInfoSnapshot> stateMetaInfoSnapshots,
                     Path exportBasePath)
-                    throws RocksDBException {
+                    throws Exception {
+
+        Preconditions.checkArgument(
+                columnFamilyHandles.size() == stateMetaInfoSnapshots.size(),
+                "Lists are aligned by index and must be of the same size!");
 
         List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>> exportResults =
                 new ArrayList<>();
@@ -200,11 +206,18 @@ public class RocksDBIncrementalCheckpointUtils {
                 RegisteredStateMetaInfoBase stateMetaInfo =
                         RegisteredStateMetaInfoBase.fromMetaInfoSnapshot(metaInfoSnapshot);
 
+                Path subPath = exportBasePath.resolve(UUID.randomUUID().toString());
                 ExportImportFilesMetaData cfMetaData =
                         checkpoint.exportColumnFamily(
-                                columnFamilyHandles.get(i),
-                                exportBasePath.resolve(UUID.randomUUID().toString()).toString());
-                exportResults.add(new Pair<>(stateMetaInfo, cfMetaData));
+                                columnFamilyHandles.get(i), subPath.toString());
+
+                File[] exportedSstFiles =
+                        subPath.toFile()
+                                .listFiles((file, name) -> name.toLowerCase().endsWith(".sst"));
+
+                if (exportedSstFiles != null && exportedSstFiles.length > 0) {
+                    exportResults.add(new Pair<>(stateMetaInfo, cfMetaData));
+                }
             }
         }
         return exportResults;

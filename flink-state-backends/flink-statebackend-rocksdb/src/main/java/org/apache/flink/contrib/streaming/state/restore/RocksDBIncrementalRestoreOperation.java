@@ -473,10 +473,6 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
                     for (Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData> entry :
                             exportedCFAndMetaData) {
                         ExportImportFilesMetaData cfMetaData = entry.getValue();
-                        // TODO: method files() doesn't exist in the RocksDB API
-                        //                        if (cfMetaData.files().isEmpty()) {
-                        //                            continue;
-                        //                        }
                         columnFamilyMetaDataToImport
                                 .computeIfAbsent(entry.getKey(), (k) -> new ArrayList<>())
                                 .add(cfMetaData);

@@ -126,7 +126,7 @@ public class RocksDBOperationUtils {
             Function<String, ColumnFamilyOptions> columnFamilyOptionsFactory,
             @Nullable RocksDbTtlCompactFiltersManager ttlCompactFiltersManager,
             @Nullable Long writeBufferManagerCapacity,
-            List<ExportImportFilesMetaData> cfMetaDataList) {
+            @Nullable List<ExportImportFilesMetaData> cfMetaDataList) {
 
         ColumnFamilyDescriptor columnFamilyDescriptor =
                 createColumnFamilyDescriptor(
@@ -136,7 +136,7 @@ public class RocksDBOperationUtils {
                         writeBufferManagerCapacity);
 
         ColumnFamilyHandle columnFamilyHandle =
-                cfMetaDataList == null
+                cfMetaDataList == null || cfMetaDataList.isEmpty()
                         ? createColumnFamily(columnFamilyDescriptor, db)
                         : createColumnFamilyWithImport(columnFamilyDescriptor, db, cfMetaDataList);
         return new RocksDBKeyedStateBackend.RocksDbKvStateInfo(columnFamilyHandle, metaInfoBase);
