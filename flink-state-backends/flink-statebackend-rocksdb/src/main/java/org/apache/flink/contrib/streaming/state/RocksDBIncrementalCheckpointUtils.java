@@ -24,7 +24,6 @@ import org.apache.flink.runtime.state.RegisteredStateMetaInfoBase;
 import org.apache.flink.runtime.state.metainfo.StateMetaInfoSnapshot;
 import org.apache.flink.util.Preconditions;
 
-import org.apache.commons.math3.util.Pair;
 import org.rocksdb.Checkpoint;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ExportImportFilesMetaData;
@@ -41,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /** Utils for RocksDB Incremental Checkpoint. */
@@ -182,23 +182,24 @@ public class RocksDBIncrementalCheckpointUtils {
 
         for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
             db.clipColumnFamily(columnFamilyHandle, beginKeyBytes, endKeyBytes);
+            // TODO: temporary fix until https://github.com/facebook/rocksdb/pull/12219
+            //  is in the frocksDB release.
+            db.compactRange(columnFamilyHandle);
         }
     }
 
-    public static List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>>
-            exportColumnFamilies(
-                    RocksDB db,
-                    List<ColumnFamilyHandle> columnFamilyHandles,
-                    List<StateMetaInfoSnapshot> stateMetaInfoSnapshots,
-                    Path exportBasePath)
-                    throws Exception {
+    public static void exportColumnFamilies(
+            RocksDB db,
+            List<ColumnFamilyHandle> columnFamilyHandles,
+            List<StateMetaInfoSnapshot> stateMetaInfoSnapshots,
+            Path exportBasePath,
+            Map<RegisteredStateMetaInfoBase, List<ExportImportFilesMetaData>> resultOutput)
+            throws RocksDBException {
 
         Preconditions.checkArgument(
                 columnFamilyHandles.size() == stateMetaInfoSnapshots.size(),
                 "Lists are aligned by index and must be of the same size!");
 
-        List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>> exportResults =
-                new ArrayList<>();
         try (final Checkpoint checkpoint = Checkpoint.create(db)) {
             for (int i = 0; i < columnFamilyHandles.size(); i++) {
                 StateMetaInfoSnapshot metaInfoSnapshot = stateMetaInfoSnapshots.get(i);
@@ -216,11 +217,12 @@ public class RocksDBIncrementalCheckpointUtils {
                                 .listFiles((file, name) -> name.toLowerCase().endsWith(".sst"));
 
                 if (exportedSstFiles != null && exportedSstFiles.length > 0) {
-                    exportResults.add(new Pair<>(stateMetaInfo, cfMetaData));
+                    resultOutput
+                            .computeIfAbsent(stateMetaInfo, (key) -> new ArrayList<>())
+                            .add(cfMetaData);
                 }
             }
         }
-        return exportResults;
     }
 
     /** check whether the bytes is before prefixBytes in the character order. */

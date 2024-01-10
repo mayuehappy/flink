@@ -53,7 +53,6 @@ import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StateMigrationException;
 import org.apache.flink.util.function.TriConsumerWithException;
 
-import org.apache.commons.math3.util.Pair;
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ColumnFamilyOptions;
@@ -440,7 +439,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
         Files.createDirectories(exportCfBasePath);
 
         final Map<RegisteredStateMetaInfoBase, List<ExportImportFilesMetaData>>
-                columnFamilyMetaDataToImport = new HashMap<>();
+                exportedColumnFamilyMetaData = new HashMap<>();
 
         try {
             for (IncrementalLocalKeyedStateHandle stateHandle : localKeyedStateHandles) {
@@ -461,22 +460,14 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
                             startKeyGroupPrefixBytes,
                             stopKeyGroupPrefixBytes);
 
-                    // Export all the Column Families
-                    List<Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData>>
-                            exportedCFAndMetaData =
-                                    RocksDBIncrementalCheckpointUtils.exportColumnFamilies(
-                                            tmpRestoreDBInfo.db,
-                                            tmpColumnFamilyHandles,
-                                            tmpRestoreDBInfo.stateMetaInfoSnapshots,
-                                            exportCfBasePath);
-
-                    for (Pair<RegisteredStateMetaInfoBase, ExportImportFilesMetaData> entry :
-                            exportedCFAndMetaData) {
-                        ExportImportFilesMetaData cfMetaData = entry.getValue();
-                        columnFamilyMetaDataToImport
-                                .computeIfAbsent(entry.getKey(), (k) -> new ArrayList<>())
-                                .add(cfMetaData);
-                    }
+                    // Export all the Column Families and store the result in
+                    // exportedColumnFamilyMetaData
+                    RocksDBIncrementalCheckpointUtils.exportColumnFamilies(
+                            tmpRestoreDBInfo.db,
+                            tmpColumnFamilyHandles,
+                            tmpRestoreDBInfo.stateMetaInfoSnapshots,
+                            exportCfBasePath,
+                            exportedColumnFamilyMetaData);
                 }
                 logger.info(
                         "Finished exporting column family from state handle: {} for rescaling.",
@@ -485,11 +476,14 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
 
             // Open the target RocksDB and import the exported column families
             this.rocksHandle.openDB();
-            columnFamilyMetaDataToImport.forEach(
+            exportedColumnFamilyMetaData.forEach(
                     this.rocksHandle::registerStateColumnFamilyHandleWithImport);
             logger.info(
                     "Finished importing exported column families into target DB for rescaling.");
         } finally {
+            // Close native RocksDB objects
+            exportedColumnFamilyMetaData.values().forEach(IOUtils::closeAllQuietly);
+            // Cleanup export base directory
             cleanUpPathQuietly(exportCfBasePath);
         }
     }
