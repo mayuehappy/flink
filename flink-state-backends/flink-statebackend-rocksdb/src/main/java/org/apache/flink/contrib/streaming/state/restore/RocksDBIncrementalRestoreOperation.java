@@ -51,7 +51,6 @@ import org.apache.flink.util.FileUtils;
 import org.apache.flink.util.IOUtils;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.StateMigrationException;
-import org.apache.flink.util.function.TriConsumerWithException;
 
 import org.rocksdb.ColumnFamilyDescriptor;
 import org.rocksdb.ColumnFamilyHandle;
@@ -111,9 +110,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
 
     private boolean isKeySerializerCompatibilityChecked;
 
-    private final TriConsumerWithException<
-                    Collection<IncrementalLocalKeyedStateHandle>, byte[], byte[], Exception>
-            rescalingRestoreFromLocalStateOperation;
+    private final boolean useIngestDbRestoreMode;
 
     public RocksDBIncrementalRestoreOperation(
             String operatorIdentifier,
@@ -162,10 +159,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
         this.keyGroupPrefixBytes = keyGroupPrefixBytes;
         this.keySerializerProvider = keySerializerProvider;
         this.userCodeClassLoader = userCodeClassLoader;
-        this.rescalingRestoreFromLocalStateOperation =
-                useIngestDbRestoreMode
-                        ? this::rescaleClipIngestDB
-                        : this::rescaleCopyFromTemporaryInstance;
+        this.useIngestDbRestoreMode = useIngestDbRestoreMode;
     }
 
     /** Root method that branches for different implementations of {@link KeyedStateHandle}. */
@@ -336,8 +330,16 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
             CompositeKeySerializationUtils.serializeKeyGroup(
                     keyGroupRange.getEndKeyGroup() + 1, stopKeyGroupPrefixBytes);
 
-            rescalingRestoreFromLocalStateOperation.accept(
-                    localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
+            if (useIngestDbRestoreMode) {
+                // Optimized path with Ingest/Clip
+                rescaleClipIngestDB(
+                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
+            } else {
+                // Legacy path
+                rescaleCopyFromTemporaryInstance(
+                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
+            }
+
         } finally {
             // Cleanup all download directories
             allDownloadSpecs.stream()
@@ -592,6 +594,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
         for (StateMetaInfoSnapshot stateMetaInfoSnapshot : stateMetaInfoSnapshots) {
             RegisteredStateMetaInfoBase metaInfoBase =
                     RegisteredStateMetaInfoBase.fromMetaInfoSnapshot(stateMetaInfoSnapshot);
+
             ColumnFamilyDescriptor columnFamilyDescriptor =
                     RocksDBOperationUtils.createColumnFamilyDescriptor(
                             metaInfoBase,

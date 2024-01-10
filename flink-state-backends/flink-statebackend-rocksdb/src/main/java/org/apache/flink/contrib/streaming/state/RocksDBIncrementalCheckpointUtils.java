@@ -22,6 +22,7 @@ import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyedStateHandle;
 import org.apache.flink.runtime.state.RegisteredStateMetaInfoBase;
 import org.apache.flink.runtime.state.metainfo.StateMetaInfoSnapshot;
+import org.apache.flink.util.IOUtils;
 import org.apache.flink.util.Preconditions;
 
 import org.rocksdb.Checkpoint;
@@ -208,7 +209,7 @@ public class RocksDBIncrementalCheckpointUtils {
                         RegisteredStateMetaInfoBase.fromMetaInfoSnapshot(metaInfoSnapshot);
 
                 Path subPath = exportBasePath.resolve(UUID.randomUUID().toString());
-                ExportImportFilesMetaData cfMetaData =
+                ExportImportFilesMetaData exportedColumnFamilyMetaData =
                         checkpoint.exportColumnFamily(
                                 columnFamilyHandles.get(i), subPath.toString());
 
@@ -219,7 +220,10 @@ public class RocksDBIncrementalCheckpointUtils {
                 if (exportedSstFiles != null && exportedSstFiles.length > 0) {
                     resultOutput
                             .computeIfAbsent(stateMetaInfo, (key) -> new ArrayList<>())
-                            .add(cfMetaData);
+                            .add(exportedColumnFamilyMetaData);
+                } else {
+                    // Close unused empty export result
+                    IOUtils.closeQuietly(exportedColumnFamilyMetaData);
                 }
             }
         }

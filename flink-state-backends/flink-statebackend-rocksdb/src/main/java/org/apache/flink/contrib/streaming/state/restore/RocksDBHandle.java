@@ -187,31 +187,23 @@ class RocksDBHandle implements AutoCloseable {
         return registeredStateMetaInfoEntry;
     }
 
-    RocksDbKvStateInfo registerStateColumnFamilyHandleWithImport(
+    void registerStateColumnFamilyHandleWithImport(
             RegisteredStateMetaInfoBase stateMetaInfo,
             List<ExportImportFilesMetaData> cfMetaDataList) {
 
-        RocksDbKvStateInfo registeredStateMetaInfoEntry =
-                kvStateInformation.get(stateMetaInfo.getName());
+        Preconditions.checkState(!kvStateInformation.containsKey(stateMetaInfo.getName()));
 
-        Preconditions.checkState(registeredStateMetaInfoEntry == null);
-
-        registeredStateMetaInfoEntry =
+        RocksDBOperationUtils.registerKvStateInformation(
+                kvStateInformation,
+                nativeMetricMonitor,
+                stateMetaInfo.getName(),
                 RocksDBOperationUtils.createStateInfo(
                         stateMetaInfo,
                         db,
                         columnFamilyOptionsFactory,
                         ttlCompactFiltersManager,
                         writeBufferManagerCapacity,
-                        cfMetaDataList);
-
-        RocksDBOperationUtils.registerKvStateInformation(
-                kvStateInformation,
-                nativeMetricMonitor,
-                stateMetaInfo.getName(),
-                registeredStateMetaInfoEntry);
-
-        return registeredStateMetaInfoEntry;
+                        cfMetaDataList));
     }
 
     /**

@@ -108,8 +108,6 @@ public class EmbeddedRocksDBStateBackend extends AbstractManagedMemoryStateBacke
 
     private static final double UNDEFINED_OVERLAP_FRACTION_THRESHOLD = -1;
 
-    private static final boolean UNDEFINED_USE_INGEST_DB_RESTORE_MODE = false;
-
     // ------------------------------------------------------------------------
 
     // -- configuration values, set in the application / configuration
@@ -171,9 +169,13 @@ public class EmbeddedRocksDBStateBackend extends AbstractManagedMemoryStateBacke
      * The threshold of the overlap fraction between the handle's key-group range and target
      * key-group range.
      */
-    private double overlapFractionThreshold;
+    private final double overlapFractionThreshold;
 
-    private boolean useIngestDbRestoreMode;
+    /**
+     * Whether we use the optimized Ingest/Clip DB method for rescaling RocksDB incremental
+     * checkpoints.
+     */
+    private final TernaryBoolean useIngestDbRestoreMode;
 
     /** Factory for Write Buffer Manager and Block Cache. */
     private RocksDBMemoryFactory rocksDBMemoryFactory;
@@ -207,7 +209,7 @@ public class EmbeddedRocksDBStateBackend extends AbstractManagedMemoryStateBacke
         this.overlapFractionThreshold = UNDEFINED_OVERLAP_FRACTION_THRESHOLD;
         this.rocksDBMemoryFactory = RocksDBMemoryFactory.DEFAULT;
         this.priorityQueueConfig = new RocksDBPriorityQueueConfig();
-        this.useIngestDbRestoreMode = UNDEFINED_USE_INGEST_DB_RESTORE_MODE;
+        this.useIngestDbRestoreMode = TernaryBoolean.UNDEFINED;
     }
 
     /**
@@ -303,9 +305,9 @@ public class EmbeddedRocksDBStateBackend extends AbstractManagedMemoryStateBacke
                 "Overlap fraction threshold of restoring should be between 0 and 1");
 
         useIngestDbRestoreMode =
-                original.useIngestDbRestoreMode == UNDEFINED_USE_INGEST_DB_RESTORE_MODE
-                        ? config.get(USE_INGEST_DB_RESTORE_MODE)
-                        : original.useIngestDbRestoreMode;
+                original.useIngestDbRestoreMode == TernaryBoolean.UNDEFINED
+                        ? TernaryBoolean.fromBoxedBoolean(config.get(USE_INGEST_DB_RESTORE_MODE))
+                        : TernaryBoolean.fromBoolean(original.getUseIngestDbRestoreMode());
 
         this.rocksDBMemoryFactory = original.rocksDBMemoryFactory;
     }
@@ -818,9 +820,7 @@ public class EmbeddedRocksDBStateBackend extends AbstractManagedMemoryStateBacke
     }
 
     boolean getUseIngestDbRestoreMode() {
-        return useIngestDbRestoreMode == UNDEFINED_USE_INGEST_DB_RESTORE_MODE
-                ? USE_INGEST_DB_RESTORE_MODE.defaultValue()
-                : useIngestDbRestoreMode;
+        return useIngestDbRestoreMode.getOrDefault(USE_INGEST_DB_RESTORE_MODE.defaultValue());
     }
 
     // ------------------------------------------------------------------------
