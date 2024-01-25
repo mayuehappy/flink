@@ -261,8 +261,11 @@ public class RocksDBOperationUtils {
         if (importFilesMetaData.isEmpty()) {
             return db.createColumnFamily(columnDescriptor);
         } else {
-            return db.createColumnFamilyWithImport(
-                    columnDescriptor, new ImportColumnFamilyOptions(), importFilesMetaData);
+            try (ImportColumnFamilyOptions importColumnFamilyOptions =
+                    new ImportColumnFamilyOptions().setMoveFiles(true)) {
+                return db.createColumnFamilyWithImport(
+                        columnDescriptor, importColumnFamilyOptions, importFilesMetaData);
+            }
         }
     }
 
