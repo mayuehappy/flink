@@ -330,12 +330,12 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
             CompositeKeySerializationUtils.serializeKeyGroup(
                     keyGroupRange.getEndKeyGroup() + 1, stopKeyGroupPrefixBytes);
 
-            if (useIngestDbRestoreMode) {
-                // Optimized path with Ingest/Clip
+            if (localKeyedStateHandles.size() > 1 && useIngestDbRestoreMode) {
+                // Optimized path for merging multiple handles with Ingest/Clip
                 rescaleClipIngestDB(
                         localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
             } else {
-                // Legacy path
+                // Optimized path for single handle and legacy path for merging multiple handles.
                 rescaleCopyFromTemporaryInstance(
                         localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
             }

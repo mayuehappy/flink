@@ -255,6 +255,11 @@ public class RocksDBIncrementalCheckpointUtils {
             @Nonnull KeyGroupRange targetKeyGroupRange,
             double overlapFractionThreshold) {
 
+        // Shortcut for a common case (scale out)
+        if (restoreStateHandles.size() == 1) {
+            return restoreStateHandles.iterator().next();
+        }
+
         T bestStateHandle = null;
         Score bestScore = Score.MIN;
         for (T rawStateHandle : restoreStateHandles) {
