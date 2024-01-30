@@ -185,7 +185,8 @@ public class RocksDBIncrementalCheckpointUtils {
             db.clipColumnFamily(columnFamilyHandle, beginKeyBytes, endKeyBytes);
             // TODO: temporary fix until https://github.com/facebook/rocksdb/pull/12219
             //  is in the frocksDB release.
-            db.compactRange(columnFamilyHandle);
+            db.compactRange(columnFamilyHandle, endKeyBytes, null);
+            db.compactRange(columnFamilyHandle, null, beginKeyBytes);
         }
     }
 
