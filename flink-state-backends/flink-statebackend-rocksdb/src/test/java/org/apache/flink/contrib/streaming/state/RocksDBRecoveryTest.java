@@ -41,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.RunnableFuture;
 import java.util.stream.Collectors;
 
@@ -70,6 +71,16 @@ public class RocksDBRecoveryTest {
     @Test
     public void testScaleIn_8_2() throws Exception {
         testRescale(8, 2, 100_000_000, 10);
+    }
+
+    @Test
+    public void testScaleIn_2_3() throws Exception {
+        testRescale(2, 3, 100_000_000, 10);
+    }
+
+    @Test
+    public void testScaleIn_3_2() throws Exception {
+        testRescale(3, 2, 100_000_000, 10);
     }
 
     public void testRescale(
@@ -139,10 +150,12 @@ public class RocksDBRecoveryTest {
                                     getSharedInstance(),
                                     fromLocalFile(
                                             TempDirUtils.newFolder(
-                                                    tempFolder, "checkpointsDir_" + i)),
+                                                    tempFolder,
+                                                    "checkpointsDir_" + UUID.randomUUID() + i)),
                                     fromLocalFile(
                                             TempDirUtils.newFolder(
-                                                    tempFolder, "sharedStateDir_" + i)),
+                                                    tempFolder,
+                                                    "sharedStateDir_" + UUID.randomUUID() + i)),
                                     1,
                                     4096);
 

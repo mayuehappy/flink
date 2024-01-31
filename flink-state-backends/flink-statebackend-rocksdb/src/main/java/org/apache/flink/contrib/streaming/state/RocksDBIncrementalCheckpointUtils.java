@@ -17,6 +17,8 @@
 
 package org.apache.flink.contrib.streaming.state;
 
+import org.apache.flink.api.common.typeutils.base.array.BytePrimitiveArrayComparator;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.state.CompositeKeySerializationUtils;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyedStateHandle;
@@ -28,6 +30,7 @@ import org.apache.flink.util.Preconditions;
 import org.rocksdb.Checkpoint;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ExportImportFilesMetaData;
+import org.rocksdb.LiveFileMetaData;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 
@@ -188,6 +191,29 @@ public class RocksDBIncrementalCheckpointUtils {
             db.compactRange(columnFamilyHandle, endKeyBytes, null);
             db.compactRange(columnFamilyHandle, null, beginKeyBytes);
         }
+    }
+
+    public static Tuple2<byte[], byte[]> getDBKeyRange(RocksDB db) {
+        byte[] smallestKey = null;
+        byte[] largestKey = null;
+        BytePrimitiveArrayComparator comparator = new BytePrimitiveArrayComparator(true);
+        List<LiveFileMetaData> liveFilesMetaData = db.getLiveFilesMetaData();
+        for (LiveFileMetaData fileMetaData : liveFilesMetaData) {
+            byte[] sstSmallestKey = fileMetaData.smallestKey();
+            byte[] sstLargestKey = fileMetaData.largestKey();
+
+            if (smallestKey == null
+                    || (fileMetaData.smallestKey() != null
+                            && comparator.compare(sstSmallestKey, smallestKey) < 0)) {
+                smallestKey = sstSmallestKey;
+            }
+            if (largestKey == null
+                    || (sstLargestKey != null
+                            && comparator.compare(sstLargestKey, largestKey) > 0)) {
+                largestKey = sstLargestKey;
+            }
+        }
+        return Tuple2.of(smallestKey, largestKey);
     }
 
     public static void exportColumnFamilies(

@@ -20,6 +20,8 @@ package org.apache.flink.contrib.streaming.state.restore;
 
 import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.common.typeutils.TypeSerializerSchemaCompatibility;
+import org.apache.flink.api.common.typeutils.base.array.BytePrimitiveArrayComparator;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.contrib.streaming.state.RocksDBIncrementalCheckpointUtils;
 import org.apache.flink.contrib.streaming.state.RocksDBKeyedStateBackend.RocksDbKvStateInfo;
 import org.apache.flink.contrib.streaming.state.RocksDBNativeMetricOptions;
@@ -82,6 +84,7 @@ import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.apache.flink.runtime.state.StateUtil.unexpectedStateHandleException;
 
@@ -330,16 +333,45 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
             CompositeKeySerializationUtils.serializeKeyGroup(
                     keyGroupRange.getEndKeyGroup() + 1, stopKeyGroupPrefixBytes);
 
-            if (localKeyedStateHandles.size() > 1 && useIngestDbRestoreMode) {
-                // Optimized path for merging multiple handles with Ingest/Clip
-                rescaleClipIngestDB(
-                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
-            } else {
-                // Optimized path for single handle and legacy path for merging multiple handles.
-                rescaleCopyFromTemporaryInstance(
-                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
-            }
+            // Open all tmp DB instance.
+            // First, determine if IngestDB can be used.
+            // If not, fallback to the old recovery method
+            HashMap<IncrementalLocalKeyedStateHandle, RestoredDBInstance>
+                    stateHandleAndRestoreDBInstance = new HashMap<>();
+            try {
+                for (IncrementalLocalKeyedStateHandle stateHandle : localKeyedStateHandles) {
+                    logger.info(
+                            "Starting to restore from state handle: {} with rescaling.",
+                            stateHandle);
+                    RestoredDBInstance tmpRestoreDBInfo =
+                            restoreTempDBInstanceFromLocalState(stateHandle);
+                    stateHandleAndRestoreDBInstance.put(stateHandle, tmpRestoreDBInfo);
+                }
 
+                boolean isRestoreDBsKeyOverlap =
+                        checkRestoreDBsKeyOverlap(stateHandleAndRestoreDBInstance.values());
+                if (localKeyedStateHandles.size() > 1
+                        && useIngestDbRestoreMode
+                        && !isRestoreDBsKeyOverlap) {
+                    // Optimized path for merging multiple handles with Ingest/Clip
+                    System.out.println("rescaleClipIngestDB");
+                    rescaleClipIngestDB(
+                            stateHandleAndRestoreDBInstance,
+                            startKeyGroupPrefixBytes,
+                            stopKeyGroupPrefixBytes);
+                } else {
+                    // Optimized path for single handle and legacy path for merging multiple
+                    // handles.
+                    System.out.println("rescaleCopyFromTemporaryInstance");
+                    rescaleCopyFromTemporaryInstance(
+                            stateHandleAndRestoreDBInstance,
+                            startKeyGroupPrefixBytes,
+                            stopKeyGroupPrefixBytes);
+                }
+            } finally {
+                // Close native RocksDB objects
+                stateHandleAndRestoreDBInstance.values().forEach(IOUtils::closeAllQuietly);
+            }
         } finally {
             // Cleanup all download directories
             allDownloadSpecs.stream()
@@ -349,7 +381,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
     }
 
     private void rescaleCopyFromTemporaryInstance(
-            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles,
+            HashMap<IncrementalLocalKeyedStateHandle, RestoredDBInstance> localKeyedStateHandles,
             byte[] startKeyGroupPrefixBytes,
             byte[] stopKeyGroupPrefixBytes)
             throws Exception {
@@ -357,25 +389,24 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
         // Choose the best state handle for the initial DB
         final IncrementalLocalKeyedStateHandle selectedInitialHandle =
                 RocksDBIncrementalCheckpointUtils.chooseTheBestStateHandleForInitial(
-                        localKeyedStateHandles, keyGroupRange, overlapFractionThreshold);
+                        localKeyedStateHandles.keySet(), keyGroupRange, overlapFractionThreshold);
 
         Preconditions.checkNotNull(selectedInitialHandle);
-
-        // Remove the selected handle from the list so that we don't restore it twice.
-        localKeyedStateHandles.remove(selectedInitialHandle);
 
         // Init the base DB instance with the initial state
         initBaseDBForRescaling(selectedInitialHandle);
 
-        for (IncrementalLocalKeyedStateHandle stateHandle : localKeyedStateHandles) {
+        for (IncrementalLocalKeyedStateHandle stateHandle : localKeyedStateHandles.keySet()) {
             logger.info("Starting to restore from state handle: {} with rescaling.", stateHandle);
 
-            try (RestoredDBInstance tmpRestoreDBInfo =
-                            restoreTempDBInstanceFromLocalState(stateHandle);
-                    RocksDBWriteBatchWrapper writeBatchWrapper =
-                            new RocksDBWriteBatchWrapper(
-                                    this.rocksHandle.getDb(), writeBatchSize)) {
+            // skip the selected handle from the list so that we don't restore it twice.
+            if (stateHandle.equals(selectedInitialHandle)) {
+                continue;
+            }
 
+            try (RocksDBWriteBatchWrapper writeBatchWrapper =
+                    new RocksDBWriteBatchWrapper(this.rocksHandle.getDb(), writeBatchSize)) {
+                RestoredDBInstance tmpRestoreDBInfo = localKeyedStateHandles.get(stateHandle);
                 List<ColumnFamilyDescriptor> tmpColumnFamilyDescriptors =
                         tmpRestoreDBInfo.columnFamilyDescriptors;
                 List<ColumnFamilyHandle> tmpColumnFamilyHandles =
@@ -431,7 +462,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
      * are copied into the real restore instance and then the temporary instance is discarded.
      */
     private void rescaleClipIngestDB(
-            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles,
+            HashMap<IncrementalLocalKeyedStateHandle, RestoredDBInstance> stateHandleAndDBInstances,
             byte[] startKeyGroupPrefixBytes,
             byte[] stopKeyGroupPrefixBytes)
             throws Exception {
@@ -444,33 +475,40 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
                 exportedColumnFamilyMetaData = new HashMap<>();
 
         try {
-            for (IncrementalLocalKeyedStateHandle stateHandle : localKeyedStateHandles) {
+            for (IncrementalLocalKeyedStateHandle stateHandle :
+                    stateHandleAndDBInstances.keySet()) {
                 logger.info(
                         "Starting to restore from state handle: {} with rescaling using Clip/Ingest DB.",
                         stateHandle);
 
-                try (RestoredDBInstance tmpRestoreDBInfo =
-                        restoreTempDBInstanceFromLocalState(stateHandle)) {
+                RestoredDBInstance tmpRestoreDBInfo = stateHandleAndDBInstances.get(stateHandle);
+                List<ColumnFamilyHandle> tmpColumnFamilyHandles =
+                        tmpRestoreDBInfo.columnFamilyHandles;
 
-                    List<ColumnFamilyHandle> tmpColumnFamilyHandles =
-                            tmpRestoreDBInfo.columnFamilyHandles;
+                // Only need deleteRange to Clip DB
+                RocksDBIncrementalCheckpointUtils.clipDBWithKeyGroupRange(
+                        tmpRestoreDBInfo.db,
+                        tmpColumnFamilyHandles,
+                        keyGroupRange,
+                        stateHandle.getKeyGroupRange(),
+                        keyGroupPrefixBytes);
 
-                    // Clip all tmp db to Range [startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes)
-                    RocksDBIncrementalCheckpointUtils.clipColumnFamilies(
-                            tmpRestoreDBInfo.db,
-                            tmpColumnFamilyHandles,
-                            startKeyGroupPrefixBytes,
-                            stopKeyGroupPrefixBytes);
+                // Clip all tmp db to Range [startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes)
+                //                RocksDBIncrementalCheckpointUtils.clipColumnFamilies(
+                //                        tmpRestoreDBInfo.db,
+                //                        tmpColumnFamilyHandles,
+                //                        startKeyGroupPrefixBytes,
+                //                        stopKeyGroupPrefixBytes);
 
-                    // Export all the Column Families and store the result in
-                    // exportedColumnFamilyMetaData
-                    RocksDBIncrementalCheckpointUtils.exportColumnFamilies(
-                            tmpRestoreDBInfo.db,
-                            tmpColumnFamilyHandles,
-                            tmpRestoreDBInfo.stateMetaInfoSnapshots,
-                            exportCfBasePath,
-                            exportedColumnFamilyMetaData);
-                }
+                // Export all the Column Families and store the result in
+                // exportedColumnFamilyMetaData
+                RocksDBIncrementalCheckpointUtils.exportColumnFamilies(
+                        tmpRestoreDBInfo.db,
+                        tmpColumnFamilyHandles,
+                        tmpRestoreDBInfo.stateMetaInfoSnapshots,
+                        exportCfBasePath,
+                        exportedColumnFamilyMetaData);
+
                 logger.info(
                         "Finished exporting column family from state handle: {} for rescaling.",
                         stateHandle);
@@ -508,6 +546,38 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
             String errMsg = "Failed to clip DB after initialization.";
             logger.error(errMsg, e);
             throw new BackendBuildingException(errMsg, e);
+        }
+    }
+
+    private boolean checkRestoreDBsKeyOverlap(Collection<RestoredDBInstance> dbInstances) {
+        List<Tuple2<byte[], byte[]>> dbKeyRanges =
+                dbInstances.stream()
+                        .map(dbInstance -> dbInstance.db)
+                        .map(RocksDBIncrementalCheckpointUtils::getDBKeyRange)
+                        .filter(keyRange -> keyRange.f0 != null)
+                        .collect(Collectors.toList());
+        BytePrimitiveArrayComparator comparator = new BytePrimitiveArrayComparator(true);
+        Collections.sort(
+                dbKeyRanges,
+                (t1, t2) -> {
+                    return comparator.compare(t1.f0, t2.f0);
+                });
+        for (int i = 0; i < dbKeyRanges.size() - 1; i++) {
+            Tuple2<byte[], byte[]> curKeyRange = dbKeyRanges.get(i);
+            byte[] curLargestKey = curKeyRange.f1;
+            Tuple2<byte[], byte[]> nextKeyRange = dbKeyRanges.get(i + 1);
+            byte[] nextSmallestKey = nextKeyRange.f0;
+            if (comparator.compare(curLargestKey, nextSmallestKey) > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static void printByteArrayAsHex(byte[] byteArray) {
+        for (byte b : byteArray) {
+            String hex = String.format("%02X", b);
+            System.out.print(hex + " ");
         }
     }
 
