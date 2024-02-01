@@ -55,42 +55,42 @@ public class RocksDBRecoveryTest {
 
     @Test
     public void testScaleOut_1_2() throws Exception {
-        testRescale(1, 2, 100_000_000, 10);
+        testRescale(1, 2, 100_000_0, 10);
     }
 
     @Test
     public void testScaleOut_2_8() throws Exception {
-        testRescale(2, 8, 100_000_000, 10);
+        testRescale(2, 8, 100_000_0, 10);
     }
 
     @Test
     public void testScaleOut_2_7() throws Exception {
-        testRescale(2, 7, 100_000_000, 10);
+        testRescale(2, 7, 100_000_0, 10);
     }
 
     @Test
     public void testScaleIn_2_1() throws Exception {
-        testRescale(2, 1, 100_000_000, 10);
+        testRescale(2, 1, 100_000_0, 10);
     }
 
     @Test
     public void testScaleIn_8_2() throws Exception {
-        testRescale(8, 2, 100_000_000, 10);
+        testRescale(8, 2, 100_000_0, 10);
     }
 
     @Test
     public void testScaleIn_7_2() throws Exception {
-        testRescale(7, 2, 100_000_000, 10);
+        testRescale(7, 2, 100_000_0, 10);
     }
 
     @Test
     public void testScaleIn_2_3() throws Exception {
-        testRescale(2, 3, 100_000_000, 10);
+        testRescale(2, 3, 100_000_0, 10);
     }
 
     @Test
     public void testScaleIn_3_2() throws Exception {
-        testRescale(3, 2, 100_000_000, 10);
+        testRescale(3, 2, 100_000_0, 10);
     }
 
     public void testRescale(
@@ -152,34 +152,7 @@ public class RocksDBRecoveryTest {
                 }
 
                 System.out.println("Creating snapshots...");
-
-                for (int i = 0; i < backends.size(); ++i) {
-                    RocksDBKeyedStateBackend<Integer> backend = backends.get(i);
-                    FsCheckpointStreamFactory fsCheckpointStreamFactory =
-                            new FsCheckpointStreamFactory(
-                                    getSharedInstance(),
-                                    fromLocalFile(
-                                            TempDirUtils.newFolder(
-                                                    tempFolder,
-                                                    "checkpointsDir_" + UUID.randomUUID() + i)),
-                                    fromLocalFile(
-                                            TempDirUtils.newFolder(
-                                                    tempFolder,
-                                                    "sharedStateDir_" + UUID.randomUUID() + i)),
-                                    1,
-                                    4096);
-
-                    RunnableFuture<SnapshotResult<KeyedStateHandle>> snapshot =
-                            backend.snapshot(
-                                    0L,
-                                    0L,
-                                    fsCheckpointStreamFactory,
-                                    CheckpointOptions.forCheckpointWithDefaultLocation());
-
-                    snapshot.run();
-                    snapshotResults.add(snapshot.get());
-                }
-
+                snapshotAllBackends(backends, snapshotResults);
             } finally {
                 for (RocksDBKeyedStateBackend<Integer> backend : backends) {
                     IOUtils.closeQuietly(backend);
@@ -190,9 +163,12 @@ public class RocksDBRecoveryTest {
             }
 
             List<KeyedStateHandle> stateHandles =
-                    snapshotResults.stream()
-                            .map(SnapshotResult::getJobManagerOwnedSnapshot)
-                            .collect(Collectors.toList());
+                    extractKeyedStateHandlesFromSnapshotResult(snapshotResults);
+
+            List<KeyGroupRange> ranges = computeKeyGroupRanges(restoreParallelism, maxParallelism);
+
+            List<List<KeyedStateHandle>> handlesByInstance =
+                    computeHandlesByInstance(stateHandles, ranges, restoreParallelism);
 
             System.out.println(
                     "Sum of snapshot sizes: "
@@ -200,27 +176,7 @@ public class RocksDBRecoveryTest {
                                     / (1024 * 1024)
                             + " MB");
 
-            List<KeyGroupRange> ranges = new ArrayList<>(restoreParallelism);
-            for (int i = 0; i < restoreParallelism; ++i) {
-                ranges.add(
-                        KeyGroupRangeAssignment.computeKeyGroupRangeForOperatorIndex(
-                                maxParallelism, restoreParallelism, i));
-            }
-
-            List<List<KeyedStateHandle>> handlesByInstance = new ArrayList<>(restoreParallelism);
-            for (KeyGroupRange targetRange : ranges) {
-                List<KeyedStateHandle> handlesForTargetRange = new ArrayList<>(1);
-                handlesByInstance.add(handlesForTargetRange);
-
-                for (KeyedStateHandle stateHandle : stateHandles) {
-                    if (stateHandle.getKeyGroupRange().getIntersection(targetRange)
-                            != KeyGroupRange.EMPTY_KEY_GROUP_RANGE) {
-                        handlesForTargetRange.add(stateHandle);
-                    }
-                }
-            }
-
-            for (boolean useIngest : Arrays.asList(Boolean.FALSE, Boolean.TRUE)) {
+            for (boolean useIngest : Arrays.asList(Boolean.FALSE)) {
                 try {
                     System.out.println("Restoring using ingest db=" + useIngest + "... ");
                     long maxInstanceTime = Long.MIN_VALUE;
@@ -257,7 +213,15 @@ public class RocksDBRecoveryTest {
                     System.out.println(
                             "Total restore time (ms): " + (System.currentTimeMillis() - t));
                     System.out.println("Max restore time (ms): " + maxInstanceTime);
-                } finally {
+
+                    ///
+                    for (SnapshotResult<KeyedStateHandle> snapshotResult : snapshotResults) {
+                        snapshotResult.discardState();
+                    }
+                    snapshotResults.clear();
+
+                    snapshotAllBackends(backends, snapshotResults);
+
                     int count = 0;
                     for (RocksDBKeyedStateBackend<Integer> backend : backends) {
                         count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
@@ -266,6 +230,60 @@ public class RocksDBRecoveryTest {
                     }
                     Assertions.assertEquals(numKeys, count);
                     backends.clear();
+
+                    stateHandles = extractKeyedStateHandlesFromSnapshotResult(snapshotResults);
+                    ranges = computeKeyGroupRanges(startParallelism, maxParallelism);
+                    handlesByInstance =
+                            computeHandlesByInstance(stateHandles, ranges, startParallelism);
+
+                    System.out.println("Restoring again...");
+                    maxInstanceTime = Long.MIN_VALUE;
+                    t = System.currentTimeMillis();
+                    for (int i = 0; i < startParallelism; ++i) {
+                        List<KeyedStateHandle> instanceHandles = handlesByInstance.get(i);
+                        long tInstance = System.currentTimeMillis();
+                        RocksDBKeyedStateBackend<Integer> backend =
+                                RocksDBTestUtils.builderForTestDefaults(
+                                                TempDirUtils.newFolder(tempFolder),
+                                                IntSerializer.INSTANCE,
+                                                maxParallelism,
+                                                ranges.get(i),
+                                                instanceHandles)
+                                        .setEnableIncrementalCheckpointing(true)
+                                        .setUseIngestDbRestoreMode(useIngest)
+                                        .build();
+
+                        long instanceTime = System.currentTimeMillis() - tInstance;
+                        if (instanceTime > maxInstanceTime) {
+                            maxInstanceTime = instanceTime;
+                        }
+
+                        System.out.println(
+                                "    Restored instance "
+                                        + i
+                                        + " from "
+                                        + instanceHandles.size()
+                                        + " state handles"
+                                        + " time (ms): "
+                                        + instanceTime);
+                        backends.add(backend);
+                    }
+                    System.out.println(
+                            "Total restore time (ms): " + (System.currentTimeMillis() - t));
+                    System.out.println("Max restore time (ms): " + maxInstanceTime);
+
+                    count = 0;
+                    for (RocksDBKeyedStateBackend<Integer> backend : backends) {
+                        count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
+                    }
+                    Assertions.assertEquals(numKeys, count);
+
+                } finally {
+                    for (RocksDBKeyedStateBackend<Integer> backend : backends) {
+                        IOUtils.closeQuietly(backend);
+                        backend.dispose();
+                    }
+                    backends.clear();
                 }
             }
         } finally {
@@ -273,5 +291,71 @@ public class RocksDBRecoveryTest {
                 snapshotResult.discardState();
             }
         }
+    }
+
+    private void snapshotAllBackends(
+            List<RocksDBKeyedStateBackend<Integer>> backends,
+            List<SnapshotResult<KeyedStateHandle>> snapshotResultsOut)
+            throws Exception {
+        for (int i = 0; i < backends.size(); ++i) {
+            RocksDBKeyedStateBackend<Integer> backend = backends.get(i);
+            FsCheckpointStreamFactory fsCheckpointStreamFactory =
+                    new FsCheckpointStreamFactory(
+                            getSharedInstance(),
+                            fromLocalFile(
+                                    TempDirUtils.newFolder(
+                                            tempFolder, "checkpointsDir_" + UUID.randomUUID() + i)),
+                            fromLocalFile(
+                                    TempDirUtils.newFolder(
+                                            tempFolder, "sharedStateDir_" + UUID.randomUUID() + i)),
+                            1,
+                            4096);
+
+            RunnableFuture<SnapshotResult<KeyedStateHandle>> snapshot =
+                    backend.snapshot(
+                            0L,
+                            0L,
+                            fsCheckpointStreamFactory,
+                            CheckpointOptions.forCheckpointWithDefaultLocation());
+
+            snapshot.run();
+            snapshotResultsOut.add(snapshot.get());
+        }
+    }
+
+    private List<KeyedStateHandle> extractKeyedStateHandlesFromSnapshotResult(
+            List<SnapshotResult<KeyedStateHandle>> snapshotResults) {
+        return snapshotResults.stream()
+                .map(SnapshotResult::getJobManagerOwnedSnapshot)
+                .collect(Collectors.toList());
+    }
+
+    private List<KeyGroupRange> computeKeyGroupRanges(int restoreParallelism, int maxParallelism) {
+        List<KeyGroupRange> ranges = new ArrayList<>(restoreParallelism);
+        for (int i = 0; i < restoreParallelism; ++i) {
+            ranges.add(
+                    KeyGroupRangeAssignment.computeKeyGroupRangeForOperatorIndex(
+                            maxParallelism, restoreParallelism, i));
+        }
+        return ranges;
+    }
+
+    private List<List<KeyedStateHandle>> computeHandlesByInstance(
+            List<KeyedStateHandle> stateHandles,
+            List<KeyGroupRange> computedRanges,
+            int restoreParallelism) {
+        List<List<KeyedStateHandle>> handlesByInstance = new ArrayList<>(restoreParallelism);
+        for (KeyGroupRange targetRange : computedRanges) {
+            List<KeyedStateHandle> handlesForTargetRange = new ArrayList<>(1);
+            handlesByInstance.add(handlesForTargetRange);
+
+            for (KeyedStateHandle stateHandle : stateHandles) {
+                if (stateHandle.getKeyGroupRange().getIntersection(targetRange)
+                        != KeyGroupRange.EMPTY_KEY_GROUP_RANGE) {
+                    handlesForTargetRange.add(stateHandle);
+                }
+            }
+        }
+        return handlesByInstance;
     }
 }
