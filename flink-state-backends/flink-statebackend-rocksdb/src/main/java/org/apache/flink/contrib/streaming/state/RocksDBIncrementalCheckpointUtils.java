@@ -17,6 +17,7 @@
 
 package org.apache.flink.contrib.streaming.state;
 
+import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.runtime.state.CompositeKeySerializationUtils;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyedStateHandle;
@@ -25,9 +26,12 @@ import org.apache.flink.runtime.state.metainfo.StateMetaInfoSnapshot;
 import org.apache.flink.util.IOUtils;
 import org.apache.flink.util.Preconditions;
 
+import org.apache.flink.shaded.guava32.com.google.common.primitives.UnsignedBytes;
+
 import org.rocksdb.Checkpoint;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.ExportImportFilesMetaData;
+import org.rocksdb.LiveFileMetaData;
 import org.rocksdb.RocksDB;
 import org.rocksdb.RocksDBException;
 
@@ -40,6 +44,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -178,16 +183,62 @@ public class RocksDBIncrementalCheckpointUtils {
             RocksDB db,
             List<ColumnFamilyHandle> columnFamilyHandles,
             byte[] beginKeyBytes,
-            byte[] endKeyBytes)
-            throws RocksDBException {
+            byte[] endKeyBytes,
+            int keyGroupPrefixBytes,
+            KeyGroupRange targetKeyGroupRange)
+            throws Exception {
 
+        KeyRange dbKeyRange = getDBKeyRange(db);
+
+        DataInputDeserializer input = new DataInputDeserializer();
+
+        input.setBuffer(dbKeyRange.minKey);
+        int beginKeyGroup = CompositeKeySerializationUtils.readKeyGroup(keyGroupPrefixBytes, input);
+
+        input.setBuffer(dbKeyRange.maxKey);
+        int endKeyGroup = CompositeKeySerializationUtils.readKeyGroup(keyGroupPrefixBytes, input);
+
+        boolean compactHead = beginKeyGroup < targetKeyGroupRange.getStartKeyGroup();
+        boolean compactTail = endKeyGroup > targetKeyGroupRange.getEndKeyGroup();
+
+        System.out.println(targetKeyGroupRange + " " + beginKeyGroup + " " + endKeyGroup);
         for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
             db.clipColumnFamily(columnFamilyHandle, beginKeyBytes, endKeyBytes);
             // TODO: temporary fix until https://github.com/facebook/rocksdb/pull/12219
             //  is in the frocksDB release.
-            db.compactRange(columnFamilyHandle, endKeyBytes, null);
-            db.compactRange(columnFamilyHandle, null, beginKeyBytes);
+            if (compactHead) {
+                db.compactRange(columnFamilyHandle, null, beginKeyBytes);
+            }
+            if (compactTail) {
+                db.compactRange(columnFamilyHandle, endKeyBytes, null);
+            }
         }
+    }
+
+    private static KeyRange getDBKeyRange(RocksDB db) {
+        final Comparator<byte[]> comparator = UnsignedBytes.lexicographicalComparator();
+        final List<LiveFileMetaData> liveFilesMetaData = db.getLiveFilesMetaData();
+
+        if (liveFilesMetaData.isEmpty()) {
+            return KeyRange.EMPTY;
+        }
+
+        Iterator<LiveFileMetaData> liveFileMetaDataIterator = liveFilesMetaData.iterator();
+        LiveFileMetaData fileMetaData = liveFileMetaDataIterator.next();
+        byte[] smallestKey = fileMetaData.smallestKey();
+        byte[] largestKey = fileMetaData.largestKey();
+        while (liveFileMetaDataIterator.hasNext()) {
+            fileMetaData = liveFileMetaDataIterator.next();
+            byte[] sstSmallestKey = fileMetaData.smallestKey();
+            byte[] sstLargestKey = fileMetaData.largestKey();
+            if (comparator.compare(sstSmallestKey, smallestKey) < 0) {
+                smallestKey = sstSmallestKey;
+            }
+            if (comparator.compare(sstLargestKey, largestKey) > 0) {
+                largestKey = sstLargestKey;
+            }
+        }
+        return KeyRange.of(smallestKey, largestKey);
     }
 
     public static void exportColumnFamilies(
@@ -274,5 +325,21 @@ public class RocksDBIncrementalCheckpointUtils {
         }
 
         return bestStateHandle;
+    }
+
+    private static final class KeyRange {
+        static final KeyRange EMPTY = KeyRange.of(new byte[0], new byte[0]);
+
+        final byte[] minKey;
+        final byte[] maxKey;
+
+        private KeyRange(byte[] minKey, byte[] maxKey) {
+            this.minKey = minKey;
+            this.maxKey = maxKey;
+        }
+
+        static KeyRange of(byte[] minKey, byte[] maxKey) {
+            return new KeyRange(minKey, maxKey);
+        }
     }
 }

@@ -455,12 +455,21 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
                     List<ColumnFamilyHandle> tmpColumnFamilyHandles =
                             tmpRestoreDBInfo.columnFamilyHandles;
 
+                    //                    RocksDBIncrementalCheckpointUtils.clipDBWithKeyGroupRange(
+                    //                            tmpRestoreDBInfo.db,
+                    //                            tmpColumnFamilyHandles,
+                    //                            keyGroupRange,
+                    //                            stateHandle.getKeyGroupRange(),
+                    //                            keyGroupPrefixBytes);
+
                     // Clip all tmp db to Range [startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes)
                     RocksDBIncrementalCheckpointUtils.clipColumnFamilies(
                             tmpRestoreDBInfo.db,
                             tmpColumnFamilyHandles,
                             startKeyGroupPrefixBytes,
-                            stopKeyGroupPrefixBytes);
+                            stopKeyGroupPrefixBytes,
+                            keyGroupPrefixBytes,
+                            stateHandle.getKeyGroupRange());
 
                     // Export all the Column Families and store the result in
                     // exportedColumnFamilyMetaData
