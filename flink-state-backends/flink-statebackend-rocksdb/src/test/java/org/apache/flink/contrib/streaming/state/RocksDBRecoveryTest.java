@@ -41,6 +41,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.RunnableFuture;
 import java.util.stream.Collectors;
 
@@ -63,6 +64,11 @@ public class RocksDBRecoveryTest {
     }
 
     @Test
+    public void testScaleOut_2_7() throws Exception {
+        testRescale(2, 7, 100_000_000, 10);
+    }
+
+    @Test
     public void testScaleIn_2_1() throws Exception {
         testRescale(2, 1, 100_000_000, 10);
     }
@@ -70,6 +76,21 @@ public class RocksDBRecoveryTest {
     @Test
     public void testScaleIn_8_2() throws Exception {
         testRescale(8, 2, 100_000_000, 10);
+    }
+
+    @Test
+    public void testScaleIn_7_2() throws Exception {
+        testRescale(7, 2, 100_000_000, 10);
+    }
+
+    @Test
+    public void testScaleIn_2_3() throws Exception {
+        testRescale(2, 3, 100_000_000, 10);
+    }
+
+    @Test
+    public void testScaleIn_3_2() throws Exception {
+        testRescale(3, 2, 100_000_000, 10);
     }
 
     public void testRescale(
@@ -139,10 +160,12 @@ public class RocksDBRecoveryTest {
                                     getSharedInstance(),
                                     fromLocalFile(
                                             TempDirUtils.newFolder(
-                                                    tempFolder, "checkpointsDir_" + i)),
+                                                    tempFolder,
+                                                    "checkpointsDir_" + UUID.randomUUID() + i)),
                                     fromLocalFile(
                                             TempDirUtils.newFolder(
-                                                    tempFolder, "sharedStateDir_" + i)),
+                                                    tempFolder,
+                                                    "sharedStateDir_" + UUID.randomUUID() + i)),
                                     1,
                                     4096);
 
@@ -200,6 +223,7 @@ public class RocksDBRecoveryTest {
             for (boolean useIngest : Arrays.asList(Boolean.FALSE, Boolean.TRUE)) {
                 try {
                     System.out.println("Restoring using ingest db=" + useIngest + "... ");
+                    long maxInstanceTime = Long.MIN_VALUE;
                     long t = System.currentTimeMillis();
                     for (int i = 0; i < restoreParallelism; ++i) {
                         List<KeyedStateHandle> instanceHandles = handlesByInstance.get(i);
@@ -214,6 +238,12 @@ public class RocksDBRecoveryTest {
                                         .setEnableIncrementalCheckpointing(true)
                                         .setUseIngestDbRestoreMode(useIngest)
                                         .build();
+
+                        long instanceTime = System.currentTimeMillis() - tInstance;
+                        if (instanceTime > maxInstanceTime) {
+                            maxInstanceTime = instanceTime;
+                        }
+
                         System.out.println(
                                 "    Restored instance "
                                         + i
@@ -221,11 +251,12 @@ public class RocksDBRecoveryTest {
                                         + instanceHandles.size()
                                         + " state handles"
                                         + " time (ms): "
-                                        + (System.currentTimeMillis() - tInstance));
+                                        + instanceTime);
                         backends.add(backend);
                     }
                     System.out.println(
                             "Total restore time (ms): " + (System.currentTimeMillis() - t));
+                    System.out.println("Max restore time (ms): " + maxInstanceTime);
                 } finally {
                     int count = 0;
                     for (RocksDBKeyedStateBackend<Integer> backend : backends) {
