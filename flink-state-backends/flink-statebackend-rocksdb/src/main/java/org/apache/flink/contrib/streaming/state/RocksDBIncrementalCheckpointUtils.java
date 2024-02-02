@@ -17,7 +17,6 @@
 
 package org.apache.flink.contrib.streaming.state;
 
-import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.runtime.state.CompositeKeySerializationUtils;
 import org.apache.flink.runtime.state.KeyGroupRange;
 import org.apache.flink.runtime.state.KeyedStateHandle;
@@ -171,46 +170,57 @@ public class RocksDBIncrementalCheckpointUtils {
     }
 
     /**
-     * Clip the entries in the CF according to the range [begin_key, end_key). Any entries outside
-     * this range will be completely deleted (including tombstones).
+     * Clips and compacts the given database to the given key-group range. Any entries outside this
+     * range will be completely deleted (including tombstones).
      *
      * @param db the target need to be clipped.
      * @param columnFamilyHandles the column family need to be clipped.
-     * @param beginKeyBytes the begin key bytes
-     * @param endKeyBytes the end key bytes
+     * @param keyGroupPrefixBytes the number of bytes required to represent all key-groups under the
+     *     current max parallelism.
+     * @param dbExpectedKeyGroupRange the key-group range the rocksdb instance.
      */
-    public static void clipColumnFamilies(
+    public static void compactSstFilesToExpectedRange(
             RocksDB db,
             List<ColumnFamilyHandle> columnFamilyHandles,
-            byte[] beginKeyBytes,
-            byte[] endKeyBytes,
             int keyGroupPrefixBytes,
-            KeyGroupRange targetKeyGroupRange)
+            KeyGroupRange dbExpectedKeyGroupRange)
             throws Exception {
 
+        final byte[] beginKeyGroupBytes = new byte[keyGroupPrefixBytes];
+        final byte[] endKeyGroupBytes = new byte[keyGroupPrefixBytes];
+
+        CompositeKeySerializationUtils.serializeKeyGroup(
+                dbExpectedKeyGroupRange.getStartKeyGroup(), beginKeyGroupBytes);
+
+        CompositeKeySerializationUtils.serializeKeyGroup(
+                dbExpectedKeyGroupRange.getEndKeyGroup() + 1, endKeyGroupBytes);
+
+        Comparator<byte[]> comparator = UnsignedBytes.lexicographicalComparator();
         KeyRange dbKeyRange = getDBKeyRange(db);
 
-        DataInputDeserializer input = new DataInputDeserializer();
+        boolean clipMinRangeRequired =
+                comparator.compare(dbKeyRange.minKey, beginKeyGroupBytes) < 0;
+        boolean clipMaxRangeRequired = comparator.compare(dbKeyRange.maxKey, endKeyGroupBytes) >= 0;
 
-        input.setBuffer(dbKeyRange.minKey);
-        int beginKeyGroup = CompositeKeySerializationUtils.readKeyGroup(keyGroupPrefixBytes, input);
-
-        input.setBuffer(dbKeyRange.maxKey);
-        int endKeyGroup = CompositeKeySerializationUtils.readKeyGroup(keyGroupPrefixBytes, input);
-
-        boolean compactHead = beginKeyGroup < targetKeyGroupRange.getStartKeyGroup();
-        boolean compactTail = endKeyGroup > targetKeyGroupRange.getEndKeyGroup();
-
-        System.out.println(targetKeyGroupRange + " " + beginKeyGroup + " " + endKeyGroup);
-        for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
-            db.clipColumnFamily(columnFamilyHandle, beginKeyBytes, endKeyBytes);
-            // TODO: temporary fix until https://github.com/facebook/rocksdb/pull/12219
-            //  is in the frocksDB release.
-            if (compactHead) {
-                db.compactRange(columnFamilyHandle, null, beginKeyBytes);
+        if (clipMinRangeRequired || clipMaxRangeRequired) {
+            for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+                db.clipColumnFamily(columnFamilyHandle, beginKeyGroupBytes, endKeyGroupBytes);
             }
-            if (compactTail) {
-                db.compactRange(columnFamilyHandle, endKeyBytes, null);
+
+            if (clipMinRangeRequired) {
+                for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+                    db.compactRange(columnFamilyHandle, new byte[] {}, beginKeyGroupBytes);
+                }
+            }
+
+            if (clipMaxRangeRequired) {
+                for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+                    db.compactRange(
+                            columnFamilyHandle,
+                            endKeyGroupBytes,
+                            // This key is larger than the current limit for key groups
+                            new byte[] {(byte) 0xFF, (byte) 0xFF});
+                }
             }
         }
     }

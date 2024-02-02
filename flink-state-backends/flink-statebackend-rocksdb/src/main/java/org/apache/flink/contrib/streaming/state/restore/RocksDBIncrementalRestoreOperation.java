@@ -321,23 +321,12 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
             // Process all state downloads
             transferRemoteStateToLocalDirectory(allDownloadSpecs);
 
-            // Transfer remaining key-groups from temporary instance into base DB
-            byte[] startKeyGroupPrefixBytes = new byte[keyGroupPrefixBytes];
-            CompositeKeySerializationUtils.serializeKeyGroup(
-                    keyGroupRange.getStartKeyGroup(), startKeyGroupPrefixBytes);
-
-            byte[] stopKeyGroupPrefixBytes = new byte[keyGroupPrefixBytes];
-            CompositeKeySerializationUtils.serializeKeyGroup(
-                    keyGroupRange.getEndKeyGroup() + 1, stopKeyGroupPrefixBytes);
-
             if (localKeyedStateHandles.size() > 1 && useIngestDbRestoreMode) {
                 // Optimized path for merging multiple handles with Ingest/Clip
-                rescaleClipIngestDB(
-                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
+                rescaleClipIngestDB(localKeyedStateHandles);
             } else {
                 // Optimized path for single handle and legacy path for merging multiple handles.
-                rescaleCopyFromTemporaryInstance(
-                        localKeyedStateHandles, startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes);
+                rescaleCopyFromTemporaryInstance(localKeyedStateHandles);
             }
 
         } finally {
@@ -349,10 +338,16 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
     }
 
     private void rescaleCopyFromTemporaryInstance(
-            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles,
-            byte[] startKeyGroupPrefixBytes,
-            byte[] stopKeyGroupPrefixBytes)
-            throws Exception {
+            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles) throws Exception {
+
+        // Transfer remaining key-groups from temporary instance into base DB
+        byte[] startKeyGroupPrefixBytes = new byte[keyGroupPrefixBytes];
+        CompositeKeySerializationUtils.serializeKeyGroup(
+                keyGroupRange.getStartKeyGroup(), startKeyGroupPrefixBytes);
+
+        byte[] stopKeyGroupPrefixBytes = new byte[keyGroupPrefixBytes];
+        CompositeKeySerializationUtils.serializeKeyGroup(
+                keyGroupRange.getEndKeyGroup() + 1, stopKeyGroupPrefixBytes);
 
         // Choose the best state handle for the initial DB
         final IncrementalLocalKeyedStateHandle selectedInitialHandle =
@@ -431,10 +426,7 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
      * are copied into the real restore instance and then the temporary instance is discarded.
      */
     private void rescaleClipIngestDB(
-            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles,
-            byte[] startKeyGroupPrefixBytes,
-            byte[] stopKeyGroupPrefixBytes)
-            throws Exception {
+            Collection<IncrementalLocalKeyedStateHandle> localKeyedStateHandles) throws Exception {
 
         final Path absolutInstanceBasePath = instanceBasePath.getAbsoluteFile().toPath();
         final Path exportCfBasePath = absolutInstanceBasePath.resolve("export-cfs");
@@ -455,19 +447,18 @@ public class RocksDBIncrementalRestoreOperation<K> implements RocksDBRestoreOper
                     List<ColumnFamilyHandle> tmpColumnFamilyHandles =
                             tmpRestoreDBInfo.columnFamilyHandles;
 
-                    //                    RocksDBIncrementalCheckpointUtils.clipDBWithKeyGroupRange(
-                    //                            tmpRestoreDBInfo.db,
-                    //                            tmpColumnFamilyHandles,
-                    //                            keyGroupRange,
-                    //                            stateHandle.getKeyGroupRange(),
-                    //                            keyGroupPrefixBytes);
-
-                    // Clip all tmp db to Range [startKeyGroupPrefixBytes, stopKeyGroupPrefixBytes)
-                    RocksDBIncrementalCheckpointUtils.clipColumnFamilies(
+                    // Use Range delete to clip the temp db to the target range of the backend
+                    RocksDBIncrementalCheckpointUtils.clipDBWithKeyGroupRange(
                             tmpRestoreDBInfo.db,
                             tmpColumnFamilyHandles,
-                            startKeyGroupPrefixBytes,
-                            stopKeyGroupPrefixBytes,
+                            keyGroupRange,
+                            stateHandle.getKeyGroupRange(),
+                            keyGroupPrefixBytes);
+
+                    // Clip all tmp db to the range specified in the corresponding state handle
+                    RocksDBIncrementalCheckpointUtils.compactSstFilesToExpectedRange(
+                            tmpRestoreDBInfo.db,
+                            tmpColumnFamilyHandles,
                             keyGroupPrefixBytes,
                             stateHandle.getKeyGroupRange());
 
