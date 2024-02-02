@@ -37,6 +37,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -55,55 +56,56 @@ public class RocksDBRecoveryTest {
 
     @Test
     public void testScaleOut_1_2() throws Exception {
-        testRescale(1, 2, 100_000_0, 10);
+        testRescale(1, 2, 100_000, 10);
     }
 
     @Test
     public void testScaleOut_2_8() throws Exception {
-        testRescale(2, 8, 100_000_0, 10);
+        testRescale(2, 8, 100_000, 10);
     }
 
     @Test
     public void testScaleOut_2_7() throws Exception {
-        testRescale(2, 7, 100_000_0, 10);
+        testRescale(2, 7, 100_000, 10);
     }
 
     @Test
     public void testScaleIn_2_1() throws Exception {
-        testRescale(2, 1, 100_000_0, 10);
+        testRescale(2, 1, 100_000, 10);
     }
 
     @Test
     public void testScaleIn_8_2() throws Exception {
-        testRescale(8, 2, 100_000_0, 10);
+        testRescale(8, 2, 100_000, 10);
     }
 
     @Test
     public void testScaleIn_7_2() throws Exception {
-        testRescale(7, 2, 100_000_0, 10);
+        testRescale(7, 2, 100_000, 10);
     }
 
     @Test
     public void testScaleIn_2_3() throws Exception {
-        testRescale(2, 3, 100_000_0, 10);
+        testRescale(2, 3, 100_000, 10);
     }
 
     @Test
     public void testScaleIn_3_2() throws Exception {
-        testRescale(3, 2, 100_000_0, 10);
+        testRescale(3, 2, 100_000, 10);
     }
 
     public void testRescale(
-            int startParallelism, int restoreParallelism, int numKeys, int updateDistance)
+            int startParallelism, int targetParallelism, int numKeys, int updateDistance)
             throws Exception {
 
         System.out.println(
-                "Rescaling from " + startParallelism + " to " + restoreParallelism + "...");
+                "Rescaling from " + startParallelism + " to " + targetParallelism + "...");
         final String stateName = "TestValueState";
-        final int maxParallelism = startParallelism * restoreParallelism;
+        final int maxParallelism = startParallelism * targetParallelism;
         final List<RocksDBKeyedStateBackend<Integer>> backends = new ArrayList<>(maxParallelism);
-        final List<SnapshotResult<KeyedStateHandle>> snapshotResults =
-                new ArrayList<>(startParallelism);
+        final List<SnapshotResult<KeyedStateHandle>> startSnapshotResult = new ArrayList<>();
+        final List<SnapshotResult<KeyedStateHandle>> rescaleSnapshotResult = new ArrayList<>();
+        final List<SnapshotResult<KeyedStateHandle>> cleanupSnapshotResult = new ArrayList<>();
         try {
             final List<ValueState<Integer>> valueStates = new ArrayList<>(maxParallelism);
             try {
@@ -152,7 +154,7 @@ public class RocksDBRecoveryTest {
                 }
 
                 System.out.println("Creating snapshots...");
-                snapshotAllBackends(backends, snapshotResults);
+                snapshotAllBackends(backends, startSnapshotResult);
             } finally {
                 for (RocksDBKeyedStateBackend<Integer> backend : backends) {
                     IOUtils.closeQuietly(backend);
@@ -162,135 +164,118 @@ public class RocksDBRecoveryTest {
                 backends.clear();
             }
 
-            List<KeyedStateHandle> stateHandles =
-                    extractKeyedStateHandlesFromSnapshotResult(snapshotResults);
+            for (boolean useIngest : Arrays.asList(Boolean.FALSE, Boolean.TRUE)) {
+                // Rescale start -> target
+                rescaleAndRestoreBackends(
+                        useIngest,
+                        targetParallelism,
+                        maxParallelism,
+                        startSnapshotResult,
+                        backends);
 
-            List<KeyGroupRange> ranges = computeKeyGroupRanges(restoreParallelism, maxParallelism);
+                snapshotAllBackends(backends, rescaleSnapshotResult);
 
-            List<List<KeyedStateHandle>> handlesByInstance =
-                    computeHandlesByInstance(stateHandles, ranges, restoreParallelism);
-
-            System.out.println(
-                    "Sum of snapshot sizes: "
-                            + stateHandles.stream().mapToLong(StateObject::getStateSize).sum()
-                                    / (1024 * 1024)
-                            + " MB");
-
-            for (boolean useIngest : Arrays.asList(Boolean.FALSE)) {
-                try {
-                    System.out.println("Restoring using ingest db=" + useIngest + "... ");
-                    long maxInstanceTime = Long.MIN_VALUE;
-                    long t = System.currentTimeMillis();
-                    for (int i = 0; i < restoreParallelism; ++i) {
-                        List<KeyedStateHandle> instanceHandles = handlesByInstance.get(i);
-                        long tInstance = System.currentTimeMillis();
-                        RocksDBKeyedStateBackend<Integer> backend =
-                                RocksDBTestUtils.builderForTestDefaults(
-                                                TempDirUtils.newFolder(tempFolder),
-                                                IntSerializer.INSTANCE,
-                                                maxParallelism,
-                                                ranges.get(i),
-                                                instanceHandles)
-                                        .setEnableIncrementalCheckpointing(true)
-                                        .setUseIngestDbRestoreMode(useIngest)
-                                        .build();
-
-                        long instanceTime = System.currentTimeMillis() - tInstance;
-                        if (instanceTime > maxInstanceTime) {
-                            maxInstanceTime = instanceTime;
-                        }
-
-                        System.out.println(
-                                "    Restored instance "
-                                        + i
-                                        + " from "
-                                        + instanceHandles.size()
-                                        + " state handles"
-                                        + " time (ms): "
-                                        + instanceTime);
-                        backends.add(backend);
-                    }
-                    System.out.println(
-                            "Total restore time (ms): " + (System.currentTimeMillis() - t));
-                    System.out.println("Max restore time (ms): " + maxInstanceTime);
-
-                    ///
-                    for (SnapshotResult<KeyedStateHandle> snapshotResult : snapshotResults) {
-                        snapshotResult.discardState();
-                    }
-                    snapshotResults.clear();
-
-                    snapshotAllBackends(backends, snapshotResults);
-
-                    int count = 0;
-                    for (RocksDBKeyedStateBackend<Integer> backend : backends) {
-                        count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
-                        IOUtils.closeQuietly(backend);
-                        backend.dispose();
-                    }
-                    Assertions.assertEquals(numKeys, count);
-                    backends.clear();
-
-                    stateHandles = extractKeyedStateHandlesFromSnapshotResult(snapshotResults);
-                    ranges = computeKeyGroupRanges(startParallelism, maxParallelism);
-                    handlesByInstance =
-                            computeHandlesByInstance(stateHandles, ranges, startParallelism);
-
-                    System.out.println("Restoring again...");
-                    maxInstanceTime = Long.MIN_VALUE;
-                    t = System.currentTimeMillis();
-                    for (int i = 0; i < startParallelism; ++i) {
-                        List<KeyedStateHandle> instanceHandles = handlesByInstance.get(i);
-                        long tInstance = System.currentTimeMillis();
-                        RocksDBKeyedStateBackend<Integer> backend =
-                                RocksDBTestUtils.builderForTestDefaults(
-                                                TempDirUtils.newFolder(tempFolder),
-                                                IntSerializer.INSTANCE,
-                                                maxParallelism,
-                                                ranges.get(i),
-                                                instanceHandles)
-                                        .setEnableIncrementalCheckpointing(true)
-                                        .setUseIngestDbRestoreMode(useIngest)
-                                        .build();
-
-                        long instanceTime = System.currentTimeMillis() - tInstance;
-                        if (instanceTime > maxInstanceTime) {
-                            maxInstanceTime = instanceTime;
-                        }
-
-                        System.out.println(
-                                "    Restored instance "
-                                        + i
-                                        + " from "
-                                        + instanceHandles.size()
-                                        + " state handles"
-                                        + " time (ms): "
-                                        + instanceTime);
-                        backends.add(backend);
-                    }
-                    System.out.println(
-                            "Total restore time (ms): " + (System.currentTimeMillis() - t));
-                    System.out.println("Max restore time (ms): " + maxInstanceTime);
-
-                    count = 0;
-                    for (RocksDBKeyedStateBackend<Integer> backend : backends) {
-                        count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
-                    }
-                    Assertions.assertEquals(numKeys, count);
-
-                } finally {
-                    for (RocksDBKeyedStateBackend<Integer> backend : backends) {
-                        IOUtils.closeQuietly(backend);
-                        backend.dispose();
-                    }
-                    backends.clear();
+                int count = 0;
+                for (RocksDBKeyedStateBackend<Integer> backend : backends) {
+                    count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
+                    IOUtils.closeQuietly(backend);
+                    backend.dispose();
                 }
+                Assertions.assertEquals(numKeys, count);
+                backends.clear();
+                cleanupSnapshotResult.addAll(rescaleSnapshotResult);
+
+                // Rescale reverse: target -> start
+                rescaleAndRestoreBackends(
+                        useIngest,
+                        startParallelism,
+                        maxParallelism,
+                        rescaleSnapshotResult,
+                        backends);
+
+                count = 0;
+                for (RocksDBKeyedStateBackend<Integer> backend : backends) {
+                    count += backend.getKeys(stateName, VoidNamespace.INSTANCE).count();
+                    IOUtils.closeQuietly(backend);
+                    backend.dispose();
+                }
+                Assertions.assertEquals(numKeys, count);
+                rescaleSnapshotResult.clear();
+                backends.clear();
             }
         } finally {
-            for (SnapshotResult<KeyedStateHandle> snapshotResult : snapshotResults) {
+            for (RocksDBKeyedStateBackend<Integer> backend : backends) {
+                IOUtils.closeQuietly(backend);
+                backend.dispose();
+            }
+            for (SnapshotResult<KeyedStateHandle> snapshotResult : startSnapshotResult) {
+                snapshotResult.discardState();
+            }
+            for (SnapshotResult<KeyedStateHandle> snapshotResult : rescaleSnapshotResult) {
+                snapshotResult.discardState();
+            }
+            for (SnapshotResult<KeyedStateHandle> snapshotResult : cleanupSnapshotResult) {
                 snapshotResult.discardState();
             }
         }
+    }
+
+    private void rescaleAndRestoreBackends(
+            boolean useIngest,
+            int targetParallelism,
+            int maxParallelism,
+            List<SnapshotResult<KeyedStateHandle>> snapshotResult,
+            List<RocksDBKeyedStateBackend<Integer>> backendsOut)
+            throws IOException {
+
+        List<KeyedStateHandle> stateHandles =
+                extractKeyedStateHandlesFromSnapshotResult(snapshotResult);
+        List<KeyGroupRange> ranges = computeKeyGroupRanges(targetParallelism, maxParallelism);
+        List<List<KeyedStateHandle>> handlesByInstance =
+                computeHandlesByInstance(stateHandles, ranges, targetParallelism);
+
+        System.out.println("Restoring using ingest db=" + useIngest + "... ");
+
+        System.out.println(
+                "Sum of snapshot sizes: "
+                        + stateHandles.stream().mapToLong(StateObject::getStateSize).sum()
+                                / (1024 * 1024)
+                        + " MB");
+
+        long maxInstanceTime = Long.MIN_VALUE;
+        long t = System.currentTimeMillis();
+        for (int i = 0; i < targetParallelism; ++i) {
+            List<KeyedStateHandle> instanceHandles = handlesByInstance.get(i);
+            long tInstance = System.currentTimeMillis();
+            RocksDBKeyedStateBackend<Integer> backend =
+                    RocksDBTestUtils.builderForTestDefaults(
+                                    TempDirUtils.newFolder(tempFolder),
+                                    IntSerializer.INSTANCE,
+                                    maxParallelism,
+                                    ranges.get(i),
+                                    instanceHandles)
+                            .setEnableIncrementalCheckpointing(true)
+                            .setUseIngestDbRestoreMode(useIngest)
+                            .build();
+
+            long instanceTime = System.currentTimeMillis() - tInstance;
+            if (instanceTime > maxInstanceTime) {
+                maxInstanceTime = instanceTime;
+            }
+
+            System.out.println(
+                    "    Restored instance "
+                            + i
+                            + " from "
+                            + instanceHandles.size()
+                            + " state handles"
+                            + " time (ms): "
+                            + instanceTime);
+
+            backendsOut.add(backend);
+        }
+        System.out.println("Total restore time (ms): " + (System.currentTimeMillis() - t));
+        System.out.println("Max restore time (ms): " + maxInstanceTime);
     }
 
     private void snapshotAllBackends(
