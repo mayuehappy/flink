@@ -29,6 +29,7 @@ import org.apache.flink.shaded.guava32.com.google.common.primitives.UnsignedByte
 
 import org.rocksdb.Checkpoint;
 import org.rocksdb.ColumnFamilyHandle;
+import org.rocksdb.CompactRangeOptions;
 import org.rocksdb.ExportImportFilesMetaData;
 import org.rocksdb.LiveFileMetaData;
 import org.rocksdb.RocksDB;
@@ -198,28 +199,40 @@ public class RocksDBIncrementalCheckpointUtils {
         Comparator<byte[]> comparator = UnsignedBytes.lexicographicalComparator();
         KeyRange dbKeyRange = getDBKeyRange(db);
 
-        boolean clipMinRangeRequired =
-                comparator.compare(dbKeyRange.minKey, beginKeyGroupBytes) < 0;
-        boolean clipMaxRangeRequired = comparator.compare(dbKeyRange.maxKey, endKeyGroupBytes) >= 0;
+        try (CompactRangeOptions compactRangeOptions =
+                new CompactRangeOptions()
+                        .setExclusiveManualCompaction(true)
+                        .setBottommostLevelCompaction(
+                                CompactRangeOptions.BottommostLevelCompaction.kForceOptimized)) {
+            boolean clipMinRangeRequired =
+                    comparator.compare(dbKeyRange.minKey, beginKeyGroupBytes) < 0;
+            boolean clipMaxRangeRequired =
+                    comparator.compare(dbKeyRange.maxKey, endKeyGroupBytes) >= 0;
 
-        if (clipMinRangeRequired || clipMaxRangeRequired) {
-            for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
-                db.clipColumnFamily(columnFamilyHandle, beginKeyGroupBytes, endKeyGroupBytes);
-            }
-
-            if (clipMinRangeRequired) {
+            if (clipMinRangeRequired || clipMaxRangeRequired) {
                 for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
-                    db.compactRange(columnFamilyHandle, new byte[] {}, beginKeyGroupBytes);
+                    db.clipColumnFamily(columnFamilyHandle, beginKeyGroupBytes, endKeyGroupBytes);
                 }
-            }
 
-            if (clipMaxRangeRequired) {
-                for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
-                    db.compactRange(
-                            columnFamilyHandle,
-                            endKeyGroupBytes,
-                            // This key is larger than the current limit for key groups
-                            new byte[] {(byte) 0xFF, (byte) 0xFF});
+                if (clipMinRangeRequired) {
+                    for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+                        db.compactRange(
+                                columnFamilyHandle,
+                                new byte[] {},
+                                beginKeyGroupBytes,
+                                compactRangeOptions);
+                    }
+                }
+
+                if (clipMaxRangeRequired) {
+                    for (ColumnFamilyHandle columnFamilyHandle : columnFamilyHandles) {
+                        db.compactRange(
+                                columnFamilyHandle,
+                                endKeyGroupBytes,
+                                // This key is larger than the current limit for key groups
+                                new byte[] {(byte) 0xFF, (byte) 0xFF},
+                                compactRangeOptions);
+                    }
                 }
             }
         }
