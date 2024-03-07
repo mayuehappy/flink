@@ -305,7 +305,7 @@ public class RocksDBKeyedStateBackendBuilder<K> extends AbstractKeyedStateBacken
 
     @Override
     public RocksDBKeyedStateBackend<K> build() throws BackendBuildingException {
-        System.out.println("build with frocksdb version 6.20.3");
+        System.out.println("build with frocksdb version 6.20.3-ververica-6.20.3_original");
         RocksDBWriteBatchWrapper writeBatchWrapper = null;
         ColumnFamilyHandle defaultColumnFamilyHandle = null;
         RocksDBNativeMetricMonitor nativeMetricMonitor = null;
