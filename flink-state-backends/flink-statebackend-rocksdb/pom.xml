@@ -63,7 +63,7 @@ under the License.
 		<dependency>
 			<groupId>com.ververica</groupId>
 			<artifactId>frocksdbjni</artifactId>
-			<version>6.20.3-ververica-6.20.3_original</version>
+			<version>9.1.0-ververica-latest_rocksdb</version>
 		</dependency>
 
 		<!-- test dependencies -->
