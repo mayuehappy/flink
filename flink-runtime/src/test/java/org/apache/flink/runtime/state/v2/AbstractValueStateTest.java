@@ -33,7 +33,7 @@ public class AbstractValueStateTest extends AbstractKeyedStateTestBase {
         ValueStateDescriptor<Integer> descriptor =
                 new ValueStateDescriptor<>("testState", BasicTypeInfo.INT_TYPE_INFO);
         AbstractValueState<String, Void, Integer> valueState =
-                new AbstractValueState<>(aec, descriptor);
+                new AbstractValueState<>(aec, descriptor.getSerializer());
         aec.setCurrentContext(aec.buildContext("test", "test"));
 
         valueState.asyncClear();

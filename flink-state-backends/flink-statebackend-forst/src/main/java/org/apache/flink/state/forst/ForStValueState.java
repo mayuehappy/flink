@@ -72,13 +72,13 @@ public class ForStValueState<K, N, V> extends AbstractValueState<K, N, V>
     public ForStValueState(
             StateRequestHandler stateRequestHandler,
             ColumnFamilyHandle columnFamily,
-            ValueStateDescriptor<V> valueStateDescriptor,
+            TypeSerializer<V> valueSerializer,
             Supplier<SerializedCompositeKeyBuilder<K>> serializedKeyBuilderInitializer,
             N defaultNamespace,
             Supplier<TypeSerializer<N>> namespaceSerializerInitializer,
             Supplier<DataOutputSerializer> valueSerializerViewInitializer,
             Supplier<DataInputDeserializer> valueDeserializerViewInitializer) {
-        super(stateRequestHandler, valueStateDescriptor);
+        super(stateRequestHandler, valueSerializer);
         this.columnFamilyHandle = columnFamily;
         this.serializedKeyBuilder = ThreadLocal.withInitial(serializedKeyBuilderInitializer);
         this.defaultNamespace = defaultNamespace;

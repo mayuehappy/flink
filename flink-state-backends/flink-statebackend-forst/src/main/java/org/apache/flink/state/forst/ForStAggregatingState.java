@@ -18,6 +18,7 @@
 
 package org.apache.flink.state.forst;
 
+import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.state.v2.AggregatingState;
 import org.apache.flink.api.common.state.v2.AggregatingStateDescriptor;
 import org.apache.flink.api.common.typeutils.TypeSerializer;
@@ -77,7 +78,8 @@ public class ForStAggregatingState<K, N, IN, ACC, OUT>
      * @param stateDescriptor     The properties of the state.
      */
     public ForStAggregatingState(
-            AggregatingStateDescriptor<IN, ACC, OUT> stateDescriptor,
+            AggregateFunction<IN, ACC, OUT> aggregateFunction,
+            TypeSerializer<ACC> valueSerializer,
             StateRequestHandler stateRequestHandler,
             ColumnFamilyHandle columnFamily,
             Supplier<SerializedCompositeKeyBuilder<K>> serializedKeyBuilderInitializer,
@@ -85,7 +87,7 @@ public class ForStAggregatingState<K, N, IN, ACC, OUT>
             Supplier<TypeSerializer<N>> namespaceSerializerInitializer,
             Supplier<DataOutputSerializer> valueSerializerViewInitializer,
             Supplier<DataInputDeserializer> valueDeserializerViewInitializer) {
-        super(stateRequestHandler, stateDescriptor);
+        super(stateRequestHandler, aggregateFunction, valueSerializer);
         this.columnFamilyHandle = columnFamily;
         this.serializedKeyBuilder = ThreadLocal.withInitial(serializedKeyBuilderInitializer);
         this.namespaceSerializer = ThreadLocal.withInitial(namespaceSerializerInitializer);

@@ -84,7 +84,8 @@ public class ForStMapState<K, N, UK, UV> extends AbstractMapState<K, N, UK, UV>
     public ForStMapState(
             StateRequestHandler stateRequestHandler,
             ColumnFamilyHandle columnFamily,
-            MapStateDescriptor<UK, UV> stateDescriptor,
+            TypeSerializer<UK> keySerializer,
+            TypeSerializer<UV> valueSerializer,
             Supplier<SerializedCompositeKeyBuilder<K>> serializedKeyBuilderInitializer,
             N defaultNamespace,
             Supplier<TypeSerializer<N>> namespaceSerializerInitializer,
@@ -92,7 +93,7 @@ public class ForStMapState<K, N, UK, UV> extends AbstractMapState<K, N, UK, UV>
             Supplier<DataInputDeserializer> keyDeserializerViewInitializer,
             Supplier<DataInputDeserializer> valueDeserializerViewInitializer,
             int keyGroupPrefixBytes) {
-        super(stateRequestHandler, stateDescriptor);
+        super(stateRequestHandler, valueSerializer);
         this.columnFamilyHandle = columnFamily;
         this.serializedKeyBuilder = ThreadLocal.withInitial(serializedKeyBuilderInitializer);
         this.defaultNamespace = defaultNamespace;
@@ -100,8 +101,8 @@ public class ForStMapState<K, N, UK, UV> extends AbstractMapState<K, N, UK, UV>
         this.valueSerializerView = ThreadLocal.withInitial(valueSerializerViewInitializer);
         this.keyDeserializerView = ThreadLocal.withInitial(keyDeserializerViewInitializer);
         this.valueDeserializerView = ThreadLocal.withInitial(valueDeserializerViewInitializer);
-        this.userKeySerializer = ThreadLocal.withInitial(stateDescriptor::getUserKeySerializer);
-        this.userValueSerializer = ThreadLocal.withInitial(stateDescriptor::getSerializer);
+        this.userKeySerializer = ThreadLocal.withInitial(keySerializer::duplicate);
+        this.userValueSerializer = ThreadLocal.withInitial(valueSerializer::duplicate);
         this.keyGroupPrefixBytes = keyGroupPrefixBytes;
     }
 
@@ -299,7 +300,8 @@ public class ForStMapState<K, N, UK, UV> extends AbstractMapState<K, N, UK, UV>
 
     @SuppressWarnings("unchecked")
     static <N, UK, UV, K, SV, S extends State> S create(
-            StateDescriptor<SV> stateDescriptor,
+            TypeSerializer<UK> keySerializer,
+            TypeSerializer<UV> valueSerializer,
             StateRequestHandler stateRequestHandler,
             ColumnFamilyHandle columnFamily,
             Supplier<SerializedCompositeKeyBuilder<K>> serializedKeyBuilderInitializer,
@@ -313,7 +315,8 @@ public class ForStMapState<K, N, UK, UV> extends AbstractMapState<K, N, UK, UV>
                 new ForStMapState<>(
                         stateRequestHandler,
                         columnFamily,
-                        (MapStateDescriptor<UK, UV>) stateDescriptor,
+                        keySerializer,
+                        valueSerializer,
                         serializedKeyBuilderInitializer,
                         defaultNamespace,
                         namespaceSerializerInitializer,

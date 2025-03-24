@@ -290,7 +290,7 @@ public class ForStKeyedStateBackend<K> implements AsyncKeyedStateBackend<K> {
                         new ForStValueState<>(
                                 stateRequestHandler,
                                 columnFamilyHandle,
-                                (ValueStateDescriptor<SV>) stateDesc,
+                                registerResult.f1.getStateSerializer(),
                                 serializedKeyBuilder,
                                 defaultNamespace,
                                 namespaceSerializer::duplicate,
@@ -302,7 +302,7 @@ public class ForStKeyedStateBackend<K> implements AsyncKeyedStateBackend<K> {
                         new ForStListState<>(
                                 stateRequestHandler,
                                 columnFamilyHandle,
-                                (ListStateDescriptor<SV>) stateDesc,
+                                registerResult.f1.getStateSerializer(),
                                 serializedKeyBuilder,
                                 defaultNamespace,
                                 namespaceSerializer::duplicate,
@@ -335,7 +335,8 @@ public class ForStKeyedStateBackend<K> implements AsyncKeyedStateBackend<K> {
             case AGGREGATING:
                 return (S)
                         new ForStAggregatingState<>(
-                                (AggregatingStateDescriptor<?, SV, ?>) stateDesc,
+                                ((AggregatingStateDescriptor<?, SV, ?>) stateDesc).getAggregateFunction(),
+                                registerResult.f1.getStateSerializer(),
                                 stateRequestHandler,
                                 columnFamilyHandle,
                                 serializedKeyBuilder,

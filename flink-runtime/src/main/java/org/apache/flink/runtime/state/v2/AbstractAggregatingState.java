@@ -22,6 +22,7 @@ import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.state.v2.AggregatingState;
 import org.apache.flink.api.common.state.v2.AggregatingStateDescriptor;
 import org.apache.flink.api.common.state.v2.StateFuture;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.core.state.StateFutureUtils;
 import org.apache.flink.runtime.asyncprocessing.StateRequestHandler;
 import org.apache.flink.runtime.asyncprocessing.StateRequestType;
@@ -54,9 +55,10 @@ public class AbstractAggregatingState<K, N, IN, ACC, OUT> extends AbstractKeyedS
      */
     public AbstractAggregatingState(
             StateRequestHandler stateRequestHandler,
-            AggregatingStateDescriptor<IN, ACC, OUT> stateDescriptor) {
-        super(stateRequestHandler, stateDescriptor);
-        this.aggregateFunction = stateDescriptor.getAggregateFunction();
+            AggregateFunction<IN, ACC, OUT> aggregateFunction,
+            TypeSerializer<ACC> valueSerializer) {
+        super(stateRequestHandler, valueSerializer);
+        this.aggregateFunction = aggregateFunction;
     }
 
     @Override

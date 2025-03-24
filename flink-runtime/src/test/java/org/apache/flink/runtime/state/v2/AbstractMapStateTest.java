@@ -38,7 +38,7 @@ public class AbstractMapStateTest extends AbstractKeyedStateTestBase {
                 new MapStateDescriptor<>(
                         "testState", BasicTypeInfo.STRING_TYPE_INFO, BasicTypeInfo.INT_TYPE_INFO);
         AbstractMapState<String, Void, String, Integer> mapState =
-                new AbstractMapState<>(aec, descriptor);
+                new AbstractMapState<>(aec, descriptor.getSerializer());
         aec.setCurrentContext(aec.buildContext("test", "test"));
 
         mapState.asyncClear();

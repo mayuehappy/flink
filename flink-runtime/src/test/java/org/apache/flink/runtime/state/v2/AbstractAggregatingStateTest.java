@@ -80,7 +80,7 @@ class AbstractAggregatingStateTest extends AbstractKeyedStateTestBase {
                 new AggregatingStateDescriptor<>(
                         "testAggState", aggregator, BasicTypeInfo.INT_TYPE_INFO);
         AbstractAggregatingState<String, Void, Integer, Integer, Integer> state =
-                new AbstractAggregatingState<>(aec, descriptor);
+                new AbstractAggregatingState<>(aec, descriptor.getAggregateFunction(), descriptor.getSerializer());
 
         aec.setCurrentContext(aec.buildContext("test", "test"));
 
@@ -121,7 +121,7 @@ class AbstractAggregatingStateTest extends AbstractKeyedStateTestBase {
                         null,
                         null);
         AbstractAggregatingState<String, String, Integer, Integer, Integer> aggregatingState =
-                new AbstractAggregatingState<>(aec, descriptor);
+                new AbstractAggregatingState<>(aec, descriptor.getAggregateFunction(), descriptor.getSerializer());
         aec.setCurrentContext(aec.buildContext("test", "test"));
         aec.setCurrentNamespaceForState(aggregatingState, "1");
         aggregatingState.add(1);
@@ -157,7 +157,7 @@ class AbstractAggregatingStateTest extends AbstractKeyedStateTestBase {
                         null,
                         null);
         AbstractAggregatingState<String, String, Integer, Integer, Integer> aggregatingState =
-                new AbstractAggregatingState<>(aec, descriptor);
+                new AbstractAggregatingState<>(aec, descriptor.getAggregateFunction(), descriptor.getSerializer());
         aec.setCurrentContext(aec.buildContext("test", "test"));
         aec.setCurrentNamespaceForState(aggregatingState, "1");
         aggregatingState.asyncAdd(1);

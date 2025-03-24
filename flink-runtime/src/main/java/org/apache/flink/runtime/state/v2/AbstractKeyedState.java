@@ -43,18 +43,15 @@ public abstract class AbstractKeyedState<K, N, V> implements InternalKeyedState<
 
     protected final StateRequestHandler stateRequestHandler;
 
-    private final StateDescriptor<V> stateDescriptor;
-
     private final ThreadLocal<TypeSerializer<V>> valueSerializer;
 
     /**
      * Creates a new AbstractKeyedState with the given asyncExecutionController and stateDescriptor.
      */
     public AbstractKeyedState(
-            StateRequestHandler stateRequestHandler, StateDescriptor<V> stateDescriptor) {
+            StateRequestHandler stateRequestHandler, TypeSerializer<V> valueSerializer) {
         this.stateRequestHandler = stateRequestHandler;
-        this.stateDescriptor = stateDescriptor;
-        this.valueSerializer = ThreadLocal.withInitial(stateDescriptor::getSerializer);
+        this.valueSerializer = ThreadLocal.withInitial(valueSerializer::duplicate);
     }
 
     /**
@@ -85,11 +82,6 @@ public abstract class AbstractKeyedState<K, N, V> implements InternalKeyedState<
 
     public final void clear() {
         handleRequestSync(StateRequestType.CLEAR, null);
-    }
-
-    /** Return specific {@code StateDescriptor}. */
-    public StateDescriptor<V> getStateDescriptor() {
-        return stateDescriptor;
     }
 
     /** Return related value serializer. */

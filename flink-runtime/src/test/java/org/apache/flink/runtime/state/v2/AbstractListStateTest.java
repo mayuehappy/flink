@@ -36,7 +36,7 @@ public class AbstractListStateTest extends AbstractKeyedStateTestBase {
         ListStateDescriptor<Integer> descriptor =
                 new ListStateDescriptor<>("testState", BasicTypeInfo.INT_TYPE_INFO);
         AbstractListState<String, Void, Integer> listState =
-                new AbstractListState<>(aec, descriptor);
+                new AbstractListState<>(aec, descriptor.getSerializer());
         aec.setCurrentContext(aec.buildContext("test", "test"));
 
         listState.asyncClear();

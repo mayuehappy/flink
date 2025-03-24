@@ -21,6 +21,7 @@ import org.apache.flink.api.common.state.v2.MapState;
 import org.apache.flink.api.common.state.v2.MapStateDescriptor;
 import org.apache.flink.api.common.state.v2.StateFuture;
 import org.apache.flink.api.common.state.v2.StateIterator;
+import org.apache.flink.api.common.typeutils.TypeSerializer;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.runtime.asyncprocessing.StateRequestHandler;
 import org.apache.flink.runtime.asyncprocessing.StateRequestType;
@@ -41,8 +42,8 @@ public class AbstractMapState<K, N, UK, V> extends AbstractKeyedState<K, N, V>
         implements InternalMapState<K, N, UK, V> {
 
     public AbstractMapState(
-            StateRequestHandler stateRequestHandler, MapStateDescriptor<UK, V> stateDescriptor) {
-        super(stateRequestHandler, stateDescriptor);
+            StateRequestHandler stateRequestHandler, TypeSerializer<V> serializer) {
+        super(stateRequestHandler, serializer);
     }
 
     @Override
